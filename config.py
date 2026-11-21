@@ -1,5 +1,5 @@
 BOT_TOKEN = "9031676987:AAHfnLPFQtIeXD5dfFhJZ3JkSYjNgvrl2dM"
-ADMIN_ID = 222619025  # твой telegram id (узнать у @userinfobot)
+ADMIN_ID = 222619025  # твой ID числом, БЕЗ кавычек (узнать у @userinfobot)
 
 START_BALANCE = 1000
 BTC_PRICE = 60000
