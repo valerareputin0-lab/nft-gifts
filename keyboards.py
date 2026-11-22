@@ -180,10 +180,11 @@ def deposits_kb():
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="bank")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+# ============ КАЗИНО ============
 def casino_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🃏 Блэкджек", callback_data="bj_start"),
-         InlineKeyboardButton(text="🎯 Рулетка", callback_data="rl_start")],
+        [InlineKeyboardButton(text="🎯 Рулетка", callback_data="rl_start"),
+         InlineKeyboardButton(text="🃏 Блэкджек", callback_data="bj_start")],
         [InlineKeyboardButton(text="🎲 Кости", callback_data="dice_start")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
@@ -197,14 +198,20 @@ def rl_choice_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔴 Красное x2", callback_data="rl_red"),
          InlineKeyboardButton(text="⚫ Чёрное x2", callback_data="rl_black")],
-        [InlineKeyboardButton(text="🟢 Зеро x14", callback_data="rl_green")],
+        [InlineKeyboardButton(text="🟢 Зеро x30", callback_data="rl_green")],
         [InlineKeyboardButton(text="Чёт x2", callback_data="rl_even"),
-         InlineKeyboardButton(text="Нечет x2", callback_data="rl_odd")]])
+         InlineKeyboardButton(text="Нечет x2", callback_data="rl_odd")],
+        [InlineKeyboardButton(text="1-12 x3", callback_data="rl_low"),
+         InlineKeyboardButton(text="13-24 x3", callback_data="rl_mid"),
+         InlineKeyboardButton(text="25-36 x3", callback_data="rl_high")]])
 
 def dice_choice_kb():
-    buttons, row = [], []
-    for i in range(1, 7):
-        row.append(InlineKeyboardButton(text=str(i), callback_data=f"dice_{i}"))
-        if len(row) == 3: buttons.append(row); row = []
-    if row: buttons.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="1", callback_data="dice_1"),
+         InlineKeyboardButton(text="2", callback_data="dice_2"),
+         InlineKeyboardButton(text="3", callback_data="dice_3")],
+        [InlineKeyboardButton(text="4", callback_data="dice_4"),
+         InlineKeyboardButton(text="5", callback_data="dice_5"),
+         InlineKeyboardButton(text="6", callback_data="dice_6")],
+        [InlineKeyboardButton(text="Меньше (1-3) x2", callback_data="dice_low"),
+         InlineKeyboardButton(text="Больше (4-6) x2", callback_data="dice_high")]])
