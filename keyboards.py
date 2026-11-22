@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import (BUSINESSES, FARMS, HOUSES, CARS, SKINS, DEPOSITS,
                     BUSINESS_LEVEL_MULT, BUSINESS_UPGRADE_COST_MULT,
-                    SELL_PERCENT, GARAGE_PRICE, FARMS_LIMIT)
+                    SELL_PERCENT, GARAGE_PERCENT, FARMS_LIMIT)
 from utils import parse_businesses, business_income, fmt_short, fmt_full
 
 def main_kb(is_admin: bool = False):
@@ -79,7 +79,7 @@ def farms_kb(farm_type, count):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 # ============ ДОМА ============
-def houses_kb(has_house, house_id):
+def houses_kb(has_house, house_id, has_garage):
     rows = []
     if not has_house:
         for key, h in HOUSES.items():
@@ -89,28 +89,32 @@ def houses_kb(has_house, house_id):
     else:
         h = HOUSES[house_id]
         sell = int(h["price"] * SELL_PERCENT)
-        rows.append([InlineKeyboardButton(text="🚗 Гараж", callback_data="garage"),
-                     InlineKeyboardButton(text="👔 Шкаф", callback_data="wardrobe")])
+        garage_price = int(h["price"] * GARAGE_PERCENT)
+        if has_garage:
+            rows.append([InlineKeyboardButton(text="🚗 Гараж", callback_data="garage"),
+                         InlineKeyboardButton(text="👔 Шкаф", callback_data="wardrobe")])
+        else:
+            rows.append([InlineKeyboardButton(
+                text=f"🚗 Купить гараж — {fmt_short(garage_price)}$",
+                callback_data="buygarage")])
+            rows.append([InlineKeyboardButton(text="👔 Шкаф", callback_data="wardrobe")])
         rows.append([InlineKeyboardButton(
             text=f"💸 Продать дом (+{fmt_short(sell)}$)",
             callback_data=f"sellhouse_{house_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def garage_kb(has_garage, cars_owned):
-    if not has_garage:
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=f"🚗 Купить гараж — {fmt_short(GARAGE_PRICE)}$",
-                                  callback_data="buygarage")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="houses")]])
+def garage_kb(cars_owned):
     rows = []
-    for key, c in CARS.items():
-        if key in cars_owned:
-            sell = int(c["price"] * SELL_PERCENT)
-            rows.append([InlineKeyboardButton(
-                text=f"✅ {c['name']} | 💸 +{fmt_short(sell)}$",
-                callback_data=f"sellcar_{key}")])
-        else:
+    if cars_owned:
+        key = cars_owned[0]
+        c = CARS[key]
+        sell = int(c["price"] * SELL_PERCENT)
+        rows.append([InlineKeyboardButton(
+            text=f"✅ {c['name']} | 💸 Продать +{fmt_short(sell)}$",
+            callback_data=f"sellcar_{key}")])
+    else:
+        for key, c in CARS.items():
             rows.append([InlineKeyboardButton(
                 text=f"{c['name']} — {fmt_short(c['price'])}$",
                 callback_data=f"buycar_{key}")])
