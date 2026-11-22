@@ -57,16 +57,14 @@ CARS = {
     "lambo":    {"name": "🏎 Lamborghini", "price": 50_000_000},
 }
 
-CLOTHES = {
-    "tshirt": {"name": "👕 Футболка", "price": 10_000},
-    "jeans":  {"name": "👖 Джинсы",   "price": 30_000},
-    "jacket": {"name": "🧥 Куртка",   "price": 100_000},
-    "suit":   {"name": "🤵 Костюм",   "price": 500_000},
-    "tuxedo": {"name": "🎩 Смокинг",  "price": 2_000_000},
+SKINS = {
+    "suit1": {"name": "👔 Хороший костюм",  "price": 50_000},
+    "suit2": {"name": "🤵 Деловой костюм",  "price": 50_000_000},
+    "suit3": {"name": "🕴 Gucci костюм",    "price": 5_000_000_000},
 }
 
 DEPOSITS = {
-    "day":   {"name": "📅 1 день",   "seconds": 86400,    "rate": 0.05},
-    "week":  {"name": "📆 1 неделя", "seconds": 604800,   "rate": 0.15},
-    "month": {"name": "🗓 1 месяц",  "seconds": 2592000,  "rate": 0.50},
+    "day":   {"name": "📅 1 день",   "seconds": 86400,    "rate": 0.01},
+    "week":  {"name": "📆 7 дней",   "seconds": 604800,   "rate": 0.10},
+    "month": {"name": "🗓 30 дней",  "seconds": 2592000,  "rate": 0.35},
 }
