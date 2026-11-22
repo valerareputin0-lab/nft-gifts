@@ -36,6 +36,8 @@ class St(StatesGroup):
     bank_in = State(); bank_out = State()
     dep_amount = State()
     sell_btc = State()
+    farm_buy_qty = State()
+    farm_sell_qty = State()
     promo_enter = State()
     admin_give = State(); admin_take = State(); admin_promo = State()
     nick_input = State()
@@ -291,51 +293,126 @@ async def cb_farms(c: CallbackQuery):
     if ftype:
         f = FARMS[ftype]
         total = total_farm_income(parse_list(u["farms"]))
-        text = (f"⛏ <b>Твои фермы</b>\n\n"
-                f"{f['name']} × {fcount} / {FARMS_LIMIT}\n"
-                f"📈 Доход: <b>{total:.2f}₿/час</b> (≈{fmt_short(int(total*BTC_PRICE))}$/ч)\n"
-                f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n"
-                f"₿ BTC: <b>{fmt_btc(u['btc'])}</b>\n"
-                f"💱 Курс: 1₿ = {fmt_full(BTC_PRICE)}$\n\n"
-                f"⚠️ Сменить тип нельзя.")
+        text = (
+            f"⛏️ Ферма {f['name'].split(' ', 1)[-1]} ({fcount}шт)\n\n"
+            f"💰 Заработок в час: {total:.0f}฿\n"
+            f"⛏️ Количество ферм: {fcount}\n"
+            f"₿ Курс Bitcoin: {fmt_short(BTC_PRICE)}$\n"
+            f"💵 В кошельке: {fmt_btc(u['btc'])}₿ (≈{fmt_full(int(u['btc']*BTC_PRICE))}$)"
+        )
     else:
-        text = (f"⛏ <b>Фермы</b>\n\n"
-                f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n"
-                f"⚠️ Выбери <b>тип фермы один раз</b> (до {FARMS_LIMIT} шт).")
+        lines = [f"🌐 {u['nick']}, список ферм:", ""]
+        for i, (key, f) in enumerate(FARMS.items(), 1):
+            lines.append(f"{i}. {f['name']}")
+            lines.append(f"⠀• Цена: {fmt_short(f['price'])}$")
+            lines.append(f"⠀• Прибыль: {f['btc_per_hour']}฿/час")
+            lines.append(f"⠀• В наличии: 0 шт.")
+            lines.append("")
+        lines.append(f"💰 Твой баланс: {fmt_full(u['balance'])}$")
+        lines.append(f"₿ Курс Bitcoin: {fmt_short(BTC_PRICE)}$")
+        text = "\n".join(lines)
     await c.message.edit_text(text, reply_markup=farms_kb(ftype, fcount), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buyfarm_"))
-async def cb_buy_farm(c: CallbackQuery):
+async def cb_buy_farm_choose(c: CallbackQuery, state: FSMContext):
     key = c.data.split("_")[1]
     if key not in FARMS: return
-    f = FARMS[key]
     u = await db.get_user(c.from_user.id)
     ftype, fcount = get_farm_info(u)
     if ftype and ftype != key:
-        await c.answer("❌ Только твой тип!", show_alert=True); return
-    if fcount >= FARMS_LIMIT:
-        await c.answer(f"❌ Лимит {FARMS_LIMIT}!", show_alert=True); return
-    if u["balance"] < f["price"]:
-        await c.answer("❌ Мало денег!", show_alert=True); return
-    await db.add_balance(c.from_user.id, -f["price"])
-    lst = parse_list(u["farms"]); lst.append(key)
-    await db.update(c.from_user.id, farms=serialize_list(lst))
-    await c.answer(f"✅ Куплена! ({len(lst)}/{FARMS_LIMIT})", show_alert=True)
-    await cb_farms(c)
+        await c.answer("❌ Можно покупать только твой тип!", show_alert=True); return
+    f = FARMS[key]
+    await state.update_data(farm_key=key)
+    await state.set_state(St.farm_buy_qty)
+    await c.message.edit_text(
+        f"➕ Покупка {f['name']}\n\n"
+        f"💵 Цена за 1: {fmt_short(f['price'])}$\n"
+        f"💰 Твой баланс: {fmt_full(u['balance'])}$\n\n"
+        f"Сколько ферм купить?")
 
-@dp.callback_query(F.data == "sell_one_farm")
-async def cb_sell_one_farm(c: CallbackQuery):
+@dp.message(St.farm_buy_qty)
+async def cb_buy_farm_qty(m: Message, state: FSMContext):
+    try: qty = int(m.text.strip())
+    except ValueError:
+        await m.answer("❌ Введи число"); return
+    if qty <= 0:
+        await m.answer("❌ Кол-во > 0"); return
+    data = await state.get_data()
+    key = data["farm_key"]
+    f = FARMS[key]
+    u = await db.get_user(m.from_user.id)
+    ftype, fcount = get_farm_info(u)
+    if ftype and ftype != key:
+        await m.answer("❌ Только твой тип!"); await state.clear(); return
+    if fcount + qty > FARMS_LIMIT:
+        await m.answer("❌ Слишком много"); await state.clear(); return
+    total_cost = f["price"] * qty
+    if u["balance"] < total_cost:
+        await m.answer(f"❌ Нужно {fmt_full(total_cost)}$, у тебя {fmt_full(u['balance'])}$")
+        await state.clear(); return
+    await db.add_balance(m.from_user.id, -total_cost)
+    lst = parse_list(u["farms"]) + [key] * qty
+    await db.update(m.from_user.id, farms=serialize_list(lst))
+    await state.clear()
+    await m.answer(f"✅ Куплено {qty} × {f['name']} за {fmt_full(total_cost)}$",
+                   reply_markup=back_kb("farms"))
+
+@dp.callback_query(F.data == "farm_buy_menu")
+async def cb_farm_buy_menu(c: CallbackQuery, state: FSMContext):
+    u = await db.get_user(c.from_user.id)
+    ftype, fcount = get_farm_info(u)
+    if not ftype:
+        await c.answer("Сначала купи тип фермы!", show_alert=True); return
+    f = FARMS[ftype]
+    await state.update_data(farm_key=ftype)
+    await state.set_state(St.farm_buy_qty)
+    await c.message.edit_text(
+        f"➕ Покупка {f['name']}\n\n"
+        f"💵 Цена за 1: {fmt_short(f['price'])}$\n"
+        f"💰 Твой баланс: {fmt_full(u['balance'])}$\n\n"
+        f"Сколько ферм купить?")
+
+@dp.callback_query(F.data == "farm_sell_menu")
+async def cb_farm_sell_menu(c: CallbackQuery, state: FSMContext):
     u = await db.get_user(c.from_user.id)
     ftype, fcount = get_farm_info(u)
     if not ftype or fcount == 0:
         await c.answer("Нет ферм", show_alert=True); return
-    await process_farms(c.from_user.id)
-    sell = int(FARMS[ftype]["price"] * SELL_PERCENT)
-    await db.add_balance(c.from_user.id, sell)
-    lst = parse_list(u["farms"]); lst.pop()
-    await db.update(c.from_user.id, farms=serialize_list(lst))
-    await c.answer(f"💸 +{fmt_full(sell)}$. Осталось {len(lst)}", show_alert=True)
-    await cb_farms(c)
+    f = FARMS[ftype]
+    sell_price = int(f["price"] * (1 - SELL_PERCENT))
+    await state.set_state(St.farm_sell_qty)
+    await c.message.edit_text(
+        f"➖ Продажа {f['name']}\n\n"
+        f"💵 Цена продажи за 1: {fmt_short(sell_price)}$ (комиссия 5%)\n"
+        f"⛏️ У тебя: {fcount} шт\n\n"
+        f"Сколько ферм продать?")
+
+@dp.message(St.farm_sell_qty)
+async def cb_sell_farm_qty(m: Message, state: FSMContext):
+    try: qty = int(m.text.strip())
+    except ValueError:
+        await m.answer("❌ Число"); return
+    if qty <= 0:
+        await m.answer("❌ Кол-во > 0"); return
+    u = await db.get_user(m.from_user.id)
+    ftype, fcount = get_farm_info(u)
+    if not ftype or fcount == 0:
+        await m.answer("❌ Нет ферм"); await state.clear(); return
+    if qty > fcount:
+        await m.answer(f"❌ У тебя только {fcount} ферм"); await state.clear(); return
+    await process_farms(m.from_user.id)
+    u = await db.get_user(m.from_user.id)
+    f = FARMS[ftype]
+    sell_price = int(f["price"] * (1 - SELL_PERCENT))
+    total = sell_price * qty
+    await db.add_balance(m.from_user.id, total)
+    lst = parse_list(u["farms"])
+    for _ in range(qty):
+        if lst: lst.pop()
+    await db.update(m.from_user.id, farms=serialize_list(lst))
+    await state.clear()
+    await m.answer(f"✅ Продано {qty} × {f['name']} за {fmt_full(total)}$",
+                   reply_markup=back_kb("farms"))
 
 @dp.callback_query(F.data == "farms_sellbtc")
 async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
@@ -344,8 +421,24 @@ async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
         await c.answer("Мало BTC", show_alert=True); return
     await state.set_state(St.sell_btc)
     await c.message.edit_text(
-        f"₿ У тебя {fmt_btc(u['btc'])} BTC\n"
-        f"Курс: 1₿ = {fmt_full(BTC_PRICE)}$\n\nСколько BTC продать?")
+        f"₿ У тебя {fmt_btc(u['btc'])}₿\n"
+        f"Курс: 1₿ = {fmt_full(BTC_PRICE)}$\n"
+        f"💰 Всего: ≈{fmt_full(int(u['btc']*BTC_PRICE))}$\n\n"
+        f"Сколько BTC продать? (например 5.5)")
+
+@dp.message(St.sell_btc)
+async def cb_sell_btc_amount(m: Message, state: FSMContext):
+    try: amount = float(m.text.strip().replace(",", "."))
+    except: await m.answer("❌ Число"); return
+    u = await db.get_user(m.from_user.id)
+    if amount <= 0 or amount > u["btc"]:
+        await m.answer("❌ Неверное"); return
+    money = int(amount * BTC_PRICE)
+    await db.update(m.from_user.id, btc=u["btc"] - amount)
+    await db.add_balance(m.from_user.id, money)
+    await state.clear()
+    await m.answer(f"✅ Продано {amount:.4f}₿ за {fmt_full(money)}$",
+                   reply_markup=back_kb("farms"))
 
 # ============ ДОМА ============
 @dp.callback_query(F.data == "houses")
@@ -736,19 +829,6 @@ async def cb_bank_view(c: CallbackQuery):
     await db.update(c.from_user.id, deposit_amount=0, deposit_end=0, deposit_rate=0)
     await c.answer(f"✅ Вклад +{fmt_full(total)}$ → баланс", show_alert=True)
     await cb_bank(c)
-
-@dp.message(St.sell_btc)
-async def cb_sell_btc_amount(m: Message, state: FSMContext):
-    try: amount = float(m.text.replace(",", "."))
-    except: await m.answer("❌ Число"); return
-    u = await db.get_user(m.from_user.id)
-    if amount <= 0 or amount > u["btc"]:
-        await m.answer("❌ Неверное"); return
-    money = int(amount * BTC_PRICE)
-    await db.update(m.from_user.id, btc=u["btc"] - amount)
-    await db.add_balance(m.from_user.id, money)
-    await state.clear()
-    await m.answer(f"✅ {amount:.4f}₿ → {fmt_full(money)}$", reply_markup=back_kb("bank"))
 
 # ============ КАЗИНО ============
 @dp.callback_query(F.data == "casino")
