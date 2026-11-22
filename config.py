@@ -1,4 +1,4 @@
-BOT_TOKEN = "9031676987:AAHfnLPFQtIeXD5dfFhJZ3JkSYjNgvrl2dM"
+BOT_TOKEN = "9031676987:AAHUik32wXJQWfPaBBYMuTpliKL48fKXOYI"
 ADMIN_ID = 222619025  # твой ID числом, БЕЗ кавычек (узнать у @userinfobot)
 
 START_BALANCE = 1000
