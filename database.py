@@ -6,7 +6,12 @@ _pool = None
 
 async def init_db():
     global _pool
-    _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5)
+    _pool = await asyncpg.create_pool(
+        DATABASE_URL,
+        min_size=1,
+        max_size=5,
+        statement_cache_size=0
+    )
     async with _pool.acquire() as c:
         await c.execute("""
             CREATE TABLE IF NOT EXISTS users (
