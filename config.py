@@ -21,7 +21,6 @@ NICK_MAX = 20
 BONUS_AMOUNT = 5000
 BONUS_COOLDOWN = 12 * 3600
 
-GARAGE_PRICE = 200_000
 FARMS_LIMIT = 9999
 
 BUSINESSES = {
@@ -42,19 +41,21 @@ FARMS = {
 }
 
 HOUSES = {
-    "shack":   {"name": "🏚 Лачуга",    "price": 5_000},
-    "house":   {"name": "🏠 Дом",       "price": 50_000},
-    "cottage": {"name": "🏡 Коттедж",   "price": 300_000},
-    "mansion": {"name": "🏰 Особняк",   "price": 1_500_000},
-    "villa":   {"name": "🏯 Вилла",     "price": 10_000_000},
+    "flat":     {"name": "🏡 Квартирка",  "price": 20_000_000},
+    "cottage":  {"name": "🏘️ Коттедж",    "price": 100_000_000},
+    "mansion":  {"name": "🏰 Особняк",    "price": 500_000_000},
+    "villa":    {"name": "🌴 Вилла",      "price": 5_000_000_000},
+    "penthouse":{"name": "🏙️ Пентхаус",   "price": 100_000_000_000},
 }
 
+GARAGE_PERCENT = 0.30
+
 CARS = {
-    "lada":     {"name": "🚗 Лада",        "price": 50_000},
-    "bmw":      {"name": "🚙 BMW",         "price": 500_000},
-    "mercedes": {"name": "🚘 Mercedes",    "price": 2_000_000},
-    "ferrari":  {"name": "🏎 Ferrari",     "price": 10_000_000},
-    "lambo":    {"name": "🏎 Lamborghini", "price": 50_000_000},
+    "hyundai":     {"name": "🚗 Hyundai",     "price": 100_000},
+    "mazda":       {"name": "🚗 Mazda",       "price": 3_000_000},
+    "bmw":         {"name": "🚗 BMW",         "price": 150_000_000},
+    "porsche":     {"name": "🚗 Porsche",     "price": 7_000_000_000},
+    "lamborghini": {"name": "🚗 Lamborghini", "price": 40_000_000_000},
 }
 
 SKINS = {
