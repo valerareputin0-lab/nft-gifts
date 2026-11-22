@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import (JOBS, BUSINESSES, FARMS, HOUSES, CARS, CLOTHES, DEPOSITS,
                     BUSINESS_LEVEL_MULT, BUSINESS_UPGRADE_COST_MULT,
-                    SELL_PERCENT, GARAGE_PRICE)
+                    SELL_PERCENT, GARAGE_PRICE, FARMS_LIMIT)
 from utils import parse_businesses, business_income
 import time
 
@@ -24,8 +24,12 @@ def main_kb(is_admin: bool = False):
 
 def back_kb(target="menu"):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data=target)]
-    ])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=target)]])
+
+def profile_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Сменить ник", callback_data="change_nick")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def jobs_kb(times):
     buttons = []
@@ -38,64 +42,70 @@ def jobs_kb(times):
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def biz_kb(biz_dict):
+    """Если бизнеса нет — меню покупки. Если есть — управление."""
     rows = []
-    for key, b in BUSINESSES.items():
-        if key in biz_dict:
-            lvl = biz_dict[key]
-            inc = business_income(key, lvl)
-            if lvl < 3:
-                cost = int(b["price"] * BUSINESS_UPGRADE_COST_MULT[lvl + 1])
-                rows.append([InlineKeyboardButton(
-                    text=f"{b['name']} Lvl {lvl} (+{inc}$/ч) — ⬆️ {cost}$",
-                    callback_data=f"upbiz_{key}"
-                )])
-            else:
-                rows.append([InlineKeyboardButton(
-                    text=f"{b['name']} MAX Lvl 3 (+{inc}$/ч)", callback_data="noop"
-                )])
-            sell = int(b["price"] * SELL_PERCENT)
+    if not biz_dict:
+        # покупка
+        for key, b in BUSINESSES.items():
             rows.append([InlineKeyboardButton(
-                text=f"💸 Продать {b['name']} +{sell}$",
-                callback_data=f"sellbiz_{key}"
-            )])
+                text=f"{b['name']} — {b['price']}$", callback_data=f"buybiz_{key}")])
+    else:
+        # управление одним бизнесом
+        bid = list(biz_dict.keys())[0]
+        lvl = biz_dict[bid]
+        b = BUSINESSES[bid]
+        inc = business_income(bid, lvl)
+        if lvl < 3:
+            cost = int(b["price"] * BUSINESS_UPGRADE_COST_MULT[lvl + 1])
+            rows.append([InlineKeyboardButton(
+                text=f"⬆️ Улучшить до Lvl {lvl+1} — {cost}$",
+                callback_data=f"upbiz_{bid}")])
         else:
-            rows.append([InlineKeyboardButton(
-                text=f"{b['name']} — {b['price']}$",
-                callback_data=f"buybiz_{key}"
-            )])
+            rows.append([InlineKeyboardButton(text="✅ Максимальный уровень", callback_data="noop")])
+        rows.append([InlineKeyboardButton(text="💰 Собрать доход", callback_data="biz_collect")])
+        sell = int(b["price"] * SELL_PERCENT)
+        rows.append([InlineKeyboardButton(
+            text=f"💸 Продать за {sell}$", callback_data=f"sellbiz_{bid}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def farms_kb(owned):
+def farms_kb(farm_type, count, balance_btc):
+    """farm_type: None (пусто) / 'farm1' / 'farm2' / 'farm3'. count: сколько куплено."""
     rows = []
-    for key, f in FARMS.items():
-        if key in owned:
-            sell = int(f["price"] * SELL_PERCENT)
+    if farm_type is None:
+        for key, f in FARMS.items():
             rows.append([InlineKeyboardButton(
-                text=f"✅ {f['name']} +{f['btc_per_hour']}₿/ч", callback_data="noop")])
+                text=f"{f['name']} — {f['price']}$ (+{f['btc_per_hour']}₿/ч)",
+                callback_data=f"buyfarm_{key}")])
+    else:
+        f = FARMS[farm_type]
+        if count < FARMS_LIMIT:
             rows.append([InlineKeyboardButton(
-                text=f"💸 Продать {f['name']} +{sell}$",
-                callback_data=f"sellfarm_{key}")])
+                text=f"➕ Купить {f['name']} — {f['price']}$ ({count}/{FARMS_LIMIT})",
+                callback_data=f"buyfarm_{farm_type}")])
         else:
-            rows.append([InlineKeyboardButton(
-                text=f"{f['name']} — {f['price']}$", callback_data=f"buyfarm_{key}")])
+            rows.append([InlineKeyboardButton(text=f"✅ Лимит {FARMS_LIMIT}", callback_data="noop")])
+        sell1 = int(f["price"] * SELL_PERCENT)
+        rows.append([InlineKeyboardButton(
+            text=f"💸 Продать 1 ферму (+{sell1}$)", callback_data="sell_one_farm")])
     rows.append([InlineKeyboardButton(text="₿ Продать BTC", callback_data="farms_sellbtc")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def houses_kb(owned):
+def houses_kb(has_house, house_id):
+    """Если дома нет — покупка. Если есть — управление."""
     rows = []
-    for key, h in HOUSES.items():
-        if key in owned:
-            sell = int(h["price"] * SELL_PERCENT)
-            rows.append([InlineKeyboardButton(
-                text=f"🏠 {h['name']} ✅ | 💸 +{sell}$",
-                callback_data=f"sellhouse_{key}")])
-        else:
+    if not has_house:
+        for key, h in HOUSES.items():
             rows.append([InlineKeyboardButton(
                 text=f"{h['name']} — {h['price']}$", callback_data=f"buyhouse_{key}")])
-    rows.append([InlineKeyboardButton(text="🚗 Гараж", callback_data="garage"),
-                 InlineKeyboardButton(text="👕 Шкаф", callback_data="wardrobe")])
+    else:
+        h = HOUSES[house_id]
+        sell = int(h["price"] * SELL_PERCENT)
+        rows.append([InlineKeyboardButton(text="🚗 Гараж", callback_data="garage"),
+                     InlineKeyboardButton(text="👕 Шкаф", callback_data="wardrobe")])
+        rows.append([InlineKeyboardButton(
+            text=f"💸 Продать дом (+{sell}$)", callback_data=f"sellhouse_{house_id}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -104,15 +114,13 @@ def garage_kb(has_garage, cars_owned):
         return InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=f"🚗 Купить гараж — {GARAGE_PRICE}$",
                                   callback_data="buygarage")],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="houses")],
-        ])
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="houses")]])
     rows = []
     for key, c in CARS.items():
         if key in cars_owned:
             sell = int(c["price"] * SELL_PERCENT)
             rows.append([InlineKeyboardButton(
-                text=f"✅ {c['name']} | 💸 +{sell}$",
-                callback_data=f"sellcar_{key}")])
+                text=f"✅ {c['name']} | 💸 +{sell}$", callback_data=f"sellcar_{key}")])
         else:
             rows.append([InlineKeyboardButton(
                 text=f"{c['name']} — {c['price']}$", callback_data=f"buycar_{key}")])
@@ -147,16 +155,14 @@ def rewards_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎁 Бонус (12ч, +5000$)", callback_data="bonus")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-    ])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def admin_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Выдать по ID", callback_data="admin_give")],
         [InlineKeyboardButton(text="💸 Забрать по ID", callback_data="admin_take")],
         [InlineKeyboardButton(text="🎟 Создать промокод", callback_data="admin_promo")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-    ])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def bank_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -164,8 +170,7 @@ def bank_kb():
         [InlineKeyboardButton(text="💸 Снять (3%)", callback_data="bank_dep_out")],
         [InlineKeyboardButton(text="📈 Открыть вклад", callback_data="bank_open")],
         [InlineKeyboardButton(text="📊 Мой вклад", callback_data="bank_view")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-    ])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def deposits_kb():
     rows = [[InlineKeyboardButton(
@@ -179,15 +184,13 @@ def casino_kb():
         [InlineKeyboardButton(text="🃏 Блэкджек", callback_data="bj_start"),
          InlineKeyboardButton(text="🎯 Рулетка", callback_data="rl_start")],
         [InlineKeyboardButton(text="🎲 Кости", callback_data="dice_start")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
-    ])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def bj_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="➕ Взять", callback_data="bj_hit"),
          InlineKeyboardButton(text="✋ Хватит", callback_data="bj_stand")],
-        [InlineKeyboardButton(text="✖️ Удвоить", callback_data="bj_double")],
-    ])
+        [InlineKeyboardButton(text="✖️ Удвоить", callback_data="bj_double")]])
 
 def rl_choice_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -195,8 +198,7 @@ def rl_choice_kb():
          InlineKeyboardButton(text="⚫ Чёрное x2", callback_data="rl_black")],
         [InlineKeyboardButton(text="🟢 Зеро x14", callback_data="rl_green")],
         [InlineKeyboardButton(text="Чёт x2", callback_data="rl_even"),
-         InlineKeyboardButton(text="Нечет x2", callback_data="rl_odd")],
-    ])
+         InlineKeyboardButton(text="Нечет x2", callback_data="rl_odd")]])
 
 def dice_choice_kb():
     buttons, row = [], []
