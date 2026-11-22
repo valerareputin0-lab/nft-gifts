@@ -1,4 +1,5 @@
 import asyncio, time, random, os
+from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
@@ -18,7 +19,7 @@ from keyboards import (main_kb, back_kb, profile_kb, biz_shop_kb, biz_confirm_kb
                        biz_manage_kb, farms_kb, houses_kb, garage_kb, wardrobe_kb,
                        shop_kb, rewards_kb, admin_kb, bank_kb, deposits_kb,
                        casino_kb, bj_kb, rl_choice_kb, dice_choice_kb)
-from config import (BUSINESSES, FARMS, HOUSES, CARS, CLOTHES, DEPOSITS,
+from config import (BUSINESSES, FARMS, HOUSES, CARS, SKINS, DEPOSITS,
                     MIN_BET, MAX_BET, WITHDRAW_FEE, BTC_PRICE, ADMIN_ID,
                     FARM_CAP_HOURS, CASH_CAP_HOURS, CASH_COLLECT_COOLDOWN,
                     SELL_PERCENT, BONUS_AMOUNT, BONUS_COOLDOWN,
@@ -43,6 +44,7 @@ def is_admin(uid): return uid == ADMIN_ID
 
 def get_biz_dict(u):
     b = parse_businesses(u["businesses"])
+    b = {k: v for k, v in b.items() if k in BUSINESSES}
     if len(b) > 1:
         b = {list(b.keys())[0]: list(b.values())[0]}
     return b
@@ -51,6 +53,9 @@ def get_farm_info(u):
     lst = parse_list(u["farms"])
     if not lst: return None, 0
     return lst[0], len(lst)
+
+def fmt_date(ts):
+    return datetime.fromtimestamp(ts).strftime("%d.%m.%Y")
 
 # ============ НИК ============
 async def ask_nick(m, state, source="start"):
@@ -172,7 +177,6 @@ async def cb_biz(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
     biz = get_biz_dict(u)
     if biz:
-        # меню управления
         bid = list(biz.keys())[0]
         lvl = biz[bid]
         b = BUSINESSES[bid]
@@ -187,7 +191,6 @@ async def cb_biz(c: CallbackQuery):
         await c.message.edit_text(text,
             reply_markup=biz_manage_kb(bid, lvl, cash > 0), parse_mode="HTML")
     else:
-        # магазин покупки
         lines = [f"💼 {u['nick']}, обеспечь себя ДЕНЬГАМИ! Список бизнесов:", ""]
         for i, (key, b) in enumerate(BUSINESSES.items(), 1):
             lines.append(f"{i}. {b['name']}")
@@ -246,13 +249,12 @@ async def cb_upgrade_biz(c: CallbackQuery):
     cost = int(b["price"] * BUSINESS_UPGRADE_COST_MULT[lvl + 1])
     if u["balance"] < cost:
         await c.answer(f"❌ Нужно {fmt_short(cost)}$", show_alert=True); return
-    # Сохраняем кассу перед улучшением
     cash, _, _ = calc_business_cash(u)
     await db.add_balance(c.from_user.id, -cost)
     await db.update(c.from_user.id,
         businesses=serialize_businesses({bid: lvl + 1}),
         business_last_collect=int(time.time()))
-    await c.answer(f"✅ Lvl {lvl+1}! Касса сохранена: {fmt_short(cash)}$", show_alert=True)
+    await c.answer(f"✅ Lvl {lvl+1}! Касса: {fmt_short(cash)}$", show_alert=True)
     await cb_biz(c)
 
 @dp.callback_query(F.data == "biz_collect")
@@ -273,12 +275,11 @@ async def cb_sell_biz(c: CallbackQuery):
     biz = get_biz_dict(u)
     if bid not in biz:
         await c.answer("Нет бизнеса", show_alert=True); return
-    # Забираем остаток кассы + 95% от цены
     cash, _, _ = calc_business_cash(u)
     sell = int(BUSINESSES[bid]["price"] * (1 - SELL_PERCENT))
     await db.add_balance(c.from_user.id, cash + sell)
     await db.update(c.from_user.id, businesses="", business_last_collect=0)
-    await c.answer(f"💸 Продано: +{fmt_full(cash + sell)}$ (касса + 95% цены)", show_alert=True)
+    await c.answer(f"💸 +{fmt_full(cash + sell)}$ (касса + 95%)", show_alert=True)
     await cb_biz(c)
 
 # ============ ФЕРМЫ ============
@@ -455,38 +456,22 @@ async def cb_wardrobe(c: CallbackQuery):
     if not parse_list(u["houses"]):
         await c.answer("Сначала дом!", show_alert=True); return
     await c.message.edit_text(
-        f"👕 <b>Шкаф</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>",
+        f"👔 <b>Шкаф скинов</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n"
+        f"Надень скин — он применится к тебе.",
         reply_markup=wardrobe_kb(parse_list(u["wardrobe"]), parse_list(u["clothes_worn"])),
         parse_mode="HTML")
-
-@dp.callback_query(F.data.startswith("buycloth_"))
-async def cb_buy_cloth(c: CallbackQuery):
-    key = c.data.split("_")[1]
-    if key not in CLOTHES: return
-    cl = CLOTHES[key]
-    u = await db.get_user(c.from_user.id)
-    owned = parse_list(u["wardrobe"])
-    if key in owned:
-        await c.answer("Уже куплено!", show_alert=True); return
-    if u["balance"] < cl["price"]:
-        await c.answer("❌ Мало денег!", show_alert=True); return
-    await db.add_balance(c.from_user.id, -cl["price"])
-    owned.append(key)
-    await db.update(c.from_user.id, wardrobe=serialize_list(owned))
-    await c.answer(f"✅ {cl['name']}!", show_alert=True)
-    if c.message.text and "Шкаф" in c.message.text:
-        await cb_wardrobe(c)
-    else:
-        await cb_shop(c)
 
 @dp.callback_query(F.data.startswith("wear_"))
 async def cb_wear(c: CallbackQuery):
     key = c.data.split("_")[1]
-    if key not in CLOTHES: return
+    if key not in SKINS: return
     u = await db.get_user(c.from_user.id)
     worn = parse_list(u["clothes_worn"])
-    if key in worn: worn.remove(key); await c.answer("Снято", show_alert=True)
-    else: worn.append(key); await c.answer("Надето", show_alert=True)
+    if key in worn:
+        worn.remove(key); await c.answer("Снято", show_alert=True)
+    else:
+        worn = [key]
+        await c.answer("Надето!", show_alert=True)
     await db.update(c.from_user.id, clothes_worn=serialize_list(worn))
     await cb_wardrobe(c)
 
@@ -494,10 +479,31 @@ async def cb_wear(c: CallbackQuery):
 @dp.callback_query(F.data == "shop")
 async def cb_shop(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
-    await c.message.edit_text(
-        f"🛒 <b>Магазин одежды</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n"
-        f"Купленная одежда → 🏠 Дома → 👕 Шкаф",
-        reply_markup=shop_kb(parse_list(u["wardrobe"])), parse_mode="HTML")
+    owned = parse_list(u["wardrobe"])
+    lines = [f"🛒 Магазин скинов", "", f"💰 Баланс: {fmt_full(u['balance'])}$", ""]
+    for i, (key, skin) in enumerate(SKINS.items(), 1):
+        lines.append(f"{i}. {skin['name']} — {fmt_short(skin['price'])}$")
+    lines.append("")
+    lines.append("Выбери скин:")
+    await c.message.edit_text("\n".join(lines),
+        reply_markup=shop_kb(owned), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("buyskin_"))
+async def cb_buy_skin(c: CallbackQuery):
+    key = c.data.split("_")[1]
+    if key not in SKINS: return
+    skin = SKINS[key]
+    u = await db.get_user(c.from_user.id)
+    owned = parse_list(u["wardrobe"])
+    if key in owned:
+        await c.answer("Уже куплено!", show_alert=True); return
+    if u["balance"] < skin["price"]:
+        await c.answer("❌ Мало денег!", show_alert=True); return
+    await db.add_balance(c.from_user.id, -skin["price"])
+    owned.append(key)
+    await db.update(c.from_user.id, wardrobe=serialize_list(owned))
+    await c.answer(f"✅ {skin['name']}!", show_alert=True)
+    await cb_shop(c)
 
 # ============ НАГРАДЫ ============
 @dp.callback_query(F.data == "rewards")
@@ -614,21 +620,31 @@ async def cb_admin_promo_do(m: Message, state: FSMContext):
 @dp.callback_query(F.data == "bank")
 async def cb_bank(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
-    dep = ""
-    if u["deposit_amount"] > 0:
-        left = int(u["deposit_end"] - time.time())
-        if left > 0: dep = f"\n📈 Вклад: {fmt_full(u['deposit_amount'])}$ ({left//3600}ч)"
-        else: dep = f"\n📈 Вклад готов: {fmt_full(int(u['deposit_amount']*(1+u['deposit_rate'])))}"
-    await c.message.edit_text(
-        f"🏦 <b>Банк</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n"
-        f"🏦 Счёт: <b>{fmt_full(u['bank_wallet'])}$</b>\n"
-        f"₿ BTC: <b>{fmt_btc(u['btc'])}</b>{dep}\n\n💸 Комиссия снятия: 3%",
-        reply_markup=bank_kb(), parse_mode="HTML")
+    has_dep = u["deposit_amount"] > 0
+    ready = has_dep and u["deposit_end"] <= time.time()
+
+    lines = [f"🏦 <b>БАНК</b>", ""]
+    lines.append(f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>")
+    lines.append(f"🏦 Счёт: <b>{fmt_full(u['bank_wallet'])}$</b>")
+    if has_dep:
+        profit = int(u["deposit_amount"] * u["deposit_rate"])
+        lines.append("")
+        lines.append(f"📈 Вклад: <b>{fmt_full(u['deposit_amount'])}$</b>")
+        lines.append(f"💵 Доход: <b>+{fmt_full(profit)}$</b>")
+        if ready:
+            lines.append(f"✅ <b>Вклад готов к снятию!</b>")
+        else:
+            lines.append(f"📅 Окончание: <b>{fmt_date(u['deposit_end'])}</b>")
+    lines.append("")
+    lines.append("💸 Комиссия снятия: 3%")
+
+    await c.message.edit_text("\n".join(lines),
+        reply_markup=bank_kb(has_dep, ready), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bank_dep_in")
 async def cb_bank_in(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.bank_in)
-    await c.message.edit_text("💵 Введи сумму:")
+    await c.message.edit_text("💵 Введи сумму для внесения на счёт:")
 
 @dp.message(St.bank_in)
 async def cb_bank_in_amount(m: Message, state: FSMContext):
@@ -640,12 +656,12 @@ async def cb_bank_in_amount(m: Message, state: FSMContext):
     await db.add_balance(m.from_user.id, -amount)
     await db.update(m.from_user.id, bank_wallet=u["bank_wallet"] + amount)
     await state.clear()
-    await m.answer(f"✅ +{fmt_full(amount)}$", reply_markup=back_kb("bank"))
+    await m.answer(f"✅ +{fmt_full(amount)}$ на счёт", reply_markup=back_kb("bank"))
 
 @dp.callback_query(F.data == "bank_dep_out")
 async def cb_bank_out(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.bank_out)
-    await c.message.edit_text("💸 Введи сумму (3%):")
+    await c.message.edit_text("💸 Введи сумму для снятия (3%):")
 
 @dp.message(St.bank_out)
 async def cb_bank_out_amount(m: Message, state: FSMContext):
@@ -658,24 +674,34 @@ async def cb_bank_out_amount(m: Message, state: FSMContext):
     await db.update(m.from_user.id, bank_wallet=u["bank_wallet"] - amount)
     await db.add_balance(m.from_user.id, net)
     await state.clear()
-    await m.answer(f"✅ {fmt_full(amount)}$\n💸 {fmt_full(fee)}$\n💰 {fmt_full(net)}$",
+    await m.answer(f"✅ Снято {fmt_full(amount)}$\n💸 Комиссия {fmt_full(fee)}$\n💰 Получено {fmt_full(net)}$",
                    reply_markup=back_kb("bank"))
 
 @dp.callback_query(F.data == "bank_open")
 async def cb_bank_open(c: CallbackQuery):
-    await c.message.edit_text("📈 <b>Вклады</b>", reply_markup=deposits_kb(), parse_mode="HTML")
+    u = await db.get_user(c.from_user.id)
+    if u["deposit_amount"] > 0:
+        await c.answer("❌ Уже есть вклад. Дождись окончания!", show_alert=True); return
+    await c.message.edit_text(
+        "📈 <b>Вклады</b>\n\nВыбери срок:\n\n"
+        "• 1 день — +1%\n• 7 дней — +10%\n• 30 дней — +35%\n\n"
+        "⚠️ Максимум 1 вклад. Снять досрочно нельзя.",
+        reply_markup=deposits_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("dep_"))
 async def cb_dep(c: CallbackQuery, state: FSMContext):
     key = c.data.split("_")[1]
     if key not in DEPOSITS: return
     u = await db.get_user(c.from_user.id)
-    if u["deposit_amount"] > 0 and u["deposit_end"] > time.time():
-        await c.answer("❌ Активный вклад", show_alert=True); return
+    if u["deposit_amount"] > 0:
+        await c.answer("❌ Уже есть вклад", show_alert=True); return
     d = DEPOSITS[key]
     await state.update_data(dep_key=key)
     await state.set_state(St.dep_amount)
-    await c.message.edit_text(f"{d['name']} — {int(d['rate']*100)}%\nВведи сумму:")
+    await c.message.edit_text(
+        f"{d['name']} — +{int(d['rate']*100)}%\n\n"
+        f"💰 Доступно: {fmt_full(u['bank_wallet'])}$ (с банковского счёта)\n\n"
+        f"Введи сумму вклада:")
 
 @dp.message(St.dep_amount)
 async def cb_dep_amount(m: Message, state: FSMContext):
@@ -684,13 +710,16 @@ async def cb_dep_amount(m: Message, state: FSMContext):
     data = await state.get_data()
     d = DEPOSITS[data["dep_key"]]
     u = await db.get_user(m.from_user.id)
-    if u["balance"] < amount:
-        await m.answer("❌ Мало"); await state.clear(); return
-    await db.add_balance(m.from_user.id, -amount)
-    await db.update(m.from_user.id, deposit_amount=amount,
-        deposit_end=int(time.time()) + d["seconds"], deposit_rate=d["rate"])
+    if u["bank_wallet"] < amount:
+        await m.answer(f"❌ На счёте только {fmt_full(u['bank_wallet'])}$"); await state.clear(); return
+    await db.update(m.from_user.id,
+        bank_wallet=u["bank_wallet"] - amount,
+        deposit_amount=amount,
+        deposit_end=int(time.time()) + d["seconds"],
+        deposit_rate=d["rate"])
     await state.clear()
-    await m.answer(f"✅ Вклад {fmt_full(amount)}$", reply_markup=back_kb("bank"))
+    await m.answer(f"✅ Вклад открыт: {fmt_full(amount)}$\n📅 Срок: {d['name']}\n💵 Доход: +{fmt_full(int(amount*d['rate']))}$",
+                   reply_markup=back_kb("bank"))
 
 @dp.callback_query(F.data == "bank_view")
 async def cb_bank_view(c: CallbackQuery):
@@ -699,11 +728,13 @@ async def cb_bank_view(c: CallbackQuery):
         await c.answer("Нет вклада", show_alert=True); return
     left = int(u["deposit_end"] - time.time())
     if left > 0:
-        await c.answer(f"⏳ {left//3600}ч {left%3600//60}м", show_alert=True); return
+        d = left // 86400
+        h = (left % 86400) // 3600
+        await c.answer(f"⏳ Осталось {d}д {h}ч", show_alert=True); return
     total = int(u["deposit_amount"] * (1 + u["deposit_rate"]))
     await db.add_balance(c.from_user.id, total)
     await db.update(c.from_user.id, deposit_amount=0, deposit_end=0, deposit_rate=0)
-    await c.answer(f"✅ +{fmt_full(total)}$", show_alert=True)
+    await c.answer(f"✅ Вклад +{fmt_full(total)}$ → баланс", show_alert=True)
     await cb_bank(c)
 
 @dp.message(St.sell_btc)
