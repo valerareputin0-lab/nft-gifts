@@ -1,5 +1,6 @@
 import time
-from config import (BUSINESSES, FARMS, PASSIVE_CAP_HOURS, BUSINESS_LEVEL_MULT)
+from config import (BUSINESSES, FARMS, FARM_CAP_HOURS, CASH_CAP_HOURS,
+                    CASH_COLLECT_COOLDOWN, BUSINESS_LEVEL_MULT)
 import database as db
 
 def fmt_full(n):
@@ -11,11 +12,17 @@ def fmt_full(n):
     parts.insert(0, s)
     return ("-" if n < 0 else "") + ".".join(parts)
 
+def fmt_short(n):
+    """20 млн, 1.2 млрд, 70 тыс"""
+    n = int(n)
+    if n >= 10**9:  return f"{n/10**9:.2f} млрд".rstrip('0').rstrip('.') + " "
+    if n >= 10**6:  return f"{n/10**6:.2f} млн".rstrip('0').rstrip('.') + " "
+    if n >= 10**3:  return f"{n/10**3:.2f} тыс".rstrip('0').rstrip('.') + " "
+    return f"{n} "
+
 def fmt_btc(n):
-    if n == 0:
-        return "0"
-    if n < 0.01:
-        return f"{n:.6f}"
+    if n == 0: return "0"
+    if n < 0.01: return f"{n:.6f}"
     return f"{n:.4f}"
 
 def parse_amount(s):
@@ -61,20 +68,48 @@ def total_business_income(biz_dict):
 def total_farm_income(farms_list):
     return sum(FARMS[f]["btc_per_hour"] for f in farms_list if f in FARMS)
 
-async def process_passive(user_id):
+# ============ БИЗНЕС-КАССА ============
+def calc_business_cash(u):
+    """Возвращает (текущая_касса, лимит_кассы, доход_в_час)."""
+    biz = parse_businesses(u["businesses"])
+    if not biz: return 0, 0, 0
+    bid = list(biz.keys())[0]
+    lvl = biz[bid]
+    income = business_income(bid, lvl)
+    cap = income * CASH_CAP_HOURS
+    last = u.get("business_last_collect") or int(time.time())
+    elapsed = int(time.time()) - last
+    cash = min(cap, int(income * elapsed / 3600))
+    return cash, cap, income
+
+async def collect_business(user_id):
+    """Собрать доход. Возвращает (сумма, оставшийся_кулдаун)."""
+    u = await db.get_user(user_id)
+    cash, _, _ = calc_business_cash(u)
+    now = int(time.time())
+    last = u.get("business_last_collect") or now
+    elapsed = now - last
+    if elapsed < CASH_COLLECT_COOLDOWN:
+        return 0, CASH_COLLECT_COOLDOWN - elapsed
+    if cash <= 0:
+        return 0, 0
+    await db.add_balance(user_id, cash)
+    await db.update(user_id, business_last_collect=now)
+    return cash, 0
+
+# ============ ФЕРМЫ (пассив BTC) ============
+async def process_farms(user_id):
     user = await db.get_user(user_id)
     now = int(time.time())
     last = user["last_passive"] or now
-    elapsed = min(now - last, PASSIVE_CAP_HOURS * 3600)
-    if elapsed < 60: return 0, 0
-    biz = parse_businesses(user["businesses"])
+    elapsed = min(now - last, FARM_CAP_HOURS * 3600)
+    if elapsed < 60: return 0
     farms = parse_list(user["farms"])
-    biz_income = total_business_income(biz) * elapsed / 3600
     farm_btc = total_farm_income(farms) * elapsed / 3600
-    if biz_income > 0: await db.add_balance(user_id, int(biz_income))
-    if farm_btc > 0: await db.update(user_id, btc=user["btc"] + farm_btc)
+    if farm_btc > 0:
+        await db.update(user_id, btc=user["btc"] + farm_btc)
     await db.update(user_id, last_passive=now)
-    return int(biz_income), farm_btc
+    return farm_btc
 
 # ============ БЛЭКДЖЕК ============
 SUITS = ['♠', '♥', '♦', '♣']
