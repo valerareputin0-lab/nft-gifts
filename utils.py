@@ -12,7 +12,11 @@ def fmt_full(n):
     return ("-" if n < 0 else "") + ".".join(parts)
 
 def fmt_btc(n):
-    return f"{n:.6f}" if n < 0.01 else f"{n:.4f}"
+    if n == 0:
+        return "0"
+    if n < 0.01:
+        return f"{n:.6f}"
+    return f"{n:.4f}"
 
 def parse_amount(s):
     if not s: return None
