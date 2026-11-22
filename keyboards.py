@@ -147,15 +147,8 @@ def shop_kb(owned):
 
 def rewards_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎁 Бонус (12ч, +5000$)", callback_data="bonus")],
+        [InlineKeyboardButton(text="🎁 Бонус (12ч, 5%)", callback_data="bonus")],
         [InlineKeyboardButton(text="🎟 Ввести промокод", callback_data="enter_promo")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
-
-def admin_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Выдать по ID", callback_data="admin_give")],
-        [InlineKeyboardButton(text="💸 Забрать по ID", callback_data="admin_take")],
-        [InlineKeyboardButton(text="🎟 Создать промокод", callback_data="admin_promo")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def bank_kb(has_deposit, deposit_ready):
@@ -180,7 +173,6 @@ def deposits_kb():
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="bank")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-# ============ КАЗИНО ============
 def casino_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🎯 Рулетка", callback_data="rl_start"),
@@ -215,3 +207,82 @@ def dice_choice_kb():
          InlineKeyboardButton(text="6", callback_data="dice_6")],
         [InlineKeyboardButton(text="Меньше (1-3) x2", callback_data="dice_low"),
          InlineKeyboardButton(text="Больше (4-6) x2", callback_data="dice_high")]])
+
+# ============ АДМИНКА ============
+def admin_main_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Деньги", callback_data="adm_money_menu"),
+         InlineKeyboardButton(text="₿ Биткоины", callback_data="adm_btc_menu")],
+        [InlineKeyboardButton(text="🏢 Имущество", callback_data="adm_prop_menu"),
+         InlineKeyboardButton(text="🚫 Блокировка", callback_data="adm_ban_menu")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats"),
+         InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")],
+        [InlineKeyboardButton(text="👤 Профиль игрока", callback_data="adm_view_profile")],
+        [InlineKeyboardButton(text="⚙️ Глобальные действия", callback_data="adm_global_menu")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
+    ])
+
+def admin_money_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Выдать по ID", callback_data="adm_give_money")],
+        [InlineKeyboardButton(text="➖ Забрать по ID", callback_data="adm_take_money")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_btc_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Выдать BTC", callback_data="adm_give_btc")],
+        [InlineKeyboardButton(text="➖ Забрать BTC", callback_data="adm_take_btc")],
+        [InlineKeyboardButton(text="💱 Изменить курс BTC", callback_data="adm_set_btc_price")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_prop_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🏠 Дом", callback_data="adm_prop_house")],
+        [InlineKeyboardButton(text="🏢 Бизнес", callback_data="adm_prop_biz")],
+        [InlineKeyboardButton(text="⛏ Ферма", callback_data="adm_prop_farm")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_ban_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🚫 Заблокировать", callback_data="adm_ban")],
+        [InlineKeyboardButton(text="✅ Разблокировать", callback_data="adm_unban")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_global_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Выдать всем", callback_data="adm_give_all")],
+        [InlineKeyboardButton(text="💸 Забрать у всех", callback_data="adm_take_all")],
+        [InlineKeyboardButton(text="🔄 Обнулить всех", callback_data="adm_reset_all")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_promo_menu_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Создать промокод", callback_data="adm_promo_create")],
+        [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data="adm_promo_delete")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
+def admin_confirm_kb(action):
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да", callback_data=f"adm_confirm_{action}"),
+         InlineKeyboardButton(text="❌ Нет", callback_data="admin_panel")]])
+
+def admin_house_select_kb(prefix):
+    rows = []
+    for key, h in HOUSES.items():
+        rows.append([InlineKeyboardButton(text=h["name"], callback_data=f"{prefix}_{key}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_prop_house")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def admin_biz_select_kb(prefix):
+    rows = []
+    for key, b in BUSINESSES.items():
+        rows.append([InlineKeyboardButton(text=b["name"], callback_data=f"{prefix}_{key}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_prop_biz")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def admin_farm_select_kb(prefix):
+    rows = []
+    for key, f in FARMS.items():
+        rows.append([InlineKeyboardButton(text=f["name"], callback_data=f"{prefix}_{key}")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_prop_farm")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
