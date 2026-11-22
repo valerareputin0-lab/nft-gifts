@@ -9,7 +9,9 @@ START_BALANCE = 1000
 BTC_PRICE = 60000
 MIN_BET = 100
 MAX_BET = 10_000_000_000_000
-PASSIVE_CAP_HOURS = 48
+FARM_CAP_HOURS = 48
+CASH_CAP_HOURS = 24
+CASH_COLLECT_COOLDOWN = 60
 WITHDRAW_FEE = 0.03
 SELL_PERCENT = 0.05
 
@@ -22,22 +24,16 @@ BONUS_COOLDOWN = 12 * 3600
 GARAGE_PRICE = 200_000
 FARMS_LIMIT = 9999
 
-JOBS = {
-    "courier":    {"name": "🍔 Курьер",       "income": 1500,  "cooldown": 300},
-    "builder":    {"name": "🏗 Строитель",    "income": 6000,  "cooldown": 900},
-    "programmer": {"name": "💻 Программист",  "income": 24000, "cooldown": 1800},
-}
-
 BUSINESSES = {
-    "coffee":  {"name": "☕ Кофейня",  "price": 10_000,    "income": 500},
-    "shop":    {"name": "🏪 Магазин",  "price": 50_000,    "income": 2500},
-    "taxi":    {"name": "🚕 Таксопарк","price": 150_000,   "income": 8000},
-    "factory": {"name": "🏭 Завод",    "price": 500_000,   "income": 25000},
-    "bank":    {"name": "🏦 Банк",     "price": 2_000_000, "income": 100000},
+    "hype":   {"name": "🐬 Хайповый паблик",    "price": 20_000_000,      "income": 70_000},
+    "sauna":  {"name": "🔥 Сауна",               "price": 100_000_000,     "income": 165_000},
+    "garage": {"name": "🔨 Завод в гараже",      "price": 500_000_000,     "income": 560_000},
+    "studio": {"name": "💡 Анимационная студия", "price": 5_000_000_000,   "income": 4_000_000},
+    "tesla":  {"name": "🚀 Tesla",               "price": 100_000_000_000, "income": 50_000_000},
 }
 
-BUSINESS_LEVEL_MULT = {1: 1.0, 2: 1.3, 3: 1.95}
-BUSINESS_UPGRADE_COST_MULT = {2: 1.0, 3: 2.0}
+BUSINESS_LEVEL_MULT = {1: 1.0, 2: 1.10, 3: 1.30}
+BUSINESS_UPGRADE_COST_MULT = {2: 1.5, 3: 2.5}
 
 FARMS = {
     "farm1": {"name": "⛏ Ферма-1", "price": 12_000_000, "btc_per_hour": 8.33},
