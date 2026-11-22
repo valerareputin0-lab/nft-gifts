@@ -1,5 +1,9 @@
+# ============ SUPABASE ============
+DATABASE_URL = "postgresql://postgres:Bombastik228@db.miizjvnllvcgdkeaverx.supabase.co:5432/postgres"
+
+# ============ BOT ============
 BOT_TOKEN = "9031676987:AAHUik32wXJQWfPaBBYMuTpliKL48fKXOYI"
-ADMIN_ID = 222619025  # число, без кавычек
+ADMIN_ID = 222619025  # твой ID числом, БЕЗ кавычек
 
 START_BALANCE = 1000
 BTC_PRICE = 60000
