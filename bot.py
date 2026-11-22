@@ -856,6 +856,7 @@ async def cb_casino(c: CallbackQuery, state: FSMContext):
     await state.clear()
     await c.message.edit_text("🎰 <b>Казино</b>", reply_markup=casino_kb(), parse_mode="HTML")
 
+# --- БЛЭКДЖЕК ---
 @dp.callback_query(F.data == "bj_start")
 async def cb_bj_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.bj_bet)
@@ -904,7 +905,10 @@ async def cb_bj_hit(c: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(St.bj_play, F.data == "bj_stand")
 async def cb_bj_stand(c: CallbackQuery, state: FSMContext):
-    await finish_bj(c, state, await state.get_data())
+    data = await state.get_data()
+    await c.message.edit_text("🤖 <b>Дилер думает...</b>")
+    await asyncio.sleep(2)
+    await finish_bj(c, state, data)
 
 @dp.callback_query(St.bj_play, F.data == "bj_double")
 async def cb_bj_double(c: CallbackQuery, state: FSMContext):
@@ -922,6 +926,8 @@ async def cb_bj_double(c: CallbackQuery, state: FSMContext):
         await db.update(c.from_user.id, losses=u["losses"]+1); await state.clear()
         await c.message.edit_text(f"💥 Перебор! -{fmt_full(data['bet'])}$",
             reply_markup=casino_kb(), parse_mode="HTML"); return
+    await c.message.edit_text("🤖 <b>Дилер думает...</b>")
+    await asyncio.sleep(2)
     await finish_bj(c, state, data)
 
 async def finish_bj(c, state, data):
@@ -942,6 +948,7 @@ async def finish_bj(c, state, data):
     await state.clear()
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
+# --- РУЛЕТКА ---
 @dp.callback_query(F.data == "rl_start")
 async def cb_rl_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.rl_bet)
@@ -969,21 +976,25 @@ async def cb_rl_result(c: CallbackQuery, state: FSMContext):
     win, mult = False, 0
     if choice == "red" and color == "red": win, mult = True, 2
     elif choice == "black" and color == "black": win, mult = True, 2
-    elif choice == "green" and color == "green": win, mult = True, 14
+    elif choice == "green" and color == "green": win, mult = True, 30
     elif choice == "even" and num != 0 and num % 2 == 0: win, mult = True, 2
     elif choice == "odd" and num != 0 and num % 2 == 1: win, mult = True, 2
+    elif choice == "low" and 1 <= num <= 12: win, mult = True, 3
+    elif choice == "mid" and 13 <= num <= 24: win, mult = True, 3
+    elif choice == "high" and 25 <= num <= 36: win, mult = True, 3
     u = await db.get_user(c.from_user.id)
     emoji = {"red": "🔴", "black": "⚫", "green": "🟢"}[color]
     if win:
         payout = bet * mult
         await db.add_balance(c.from_user.id, payout)
         await db.update(c.from_user.id, wins=u["wins"]+1)
-        text = f"🎯 {emoji} <b>{num}</b>\n\n✅ +{fmt_full(payout - bet)}$ (x{mult})"
+        text = f"🎯 Выпало: {emoji} <b>{num}</b>\n\n✅ Победа! +{fmt_full(payout - bet)}$ (x{mult})"
     else:
         await db.update(c.from_user.id, losses=u["losses"]+1)
-        text = f"🎯 {emoji} <b>{num}</b>\n\n❌ -{fmt_full(bet)}$"
+        text = f"🎯 Выпало: {emoji} <b>{num}</b>\n\n❌ Проигрыш: -{fmt_full(bet)}$"
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
+# --- КОСТИ ---
 @dp.callback_query(F.data == "dice_start")
 async def cb_dice_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.dice_bet)
@@ -999,24 +1010,28 @@ async def cb_dice_bet(m: Message, state: FSMContext):
         await m.answer("❌ Мало"); await state.clear(); return
     await db.add_balance(m.from_user.id, -bet)
     await state.update_data(bet=bet)
-    await m.answer(f"🎲 Ставка: {fmt_full(bet)}$\nУгадай (x6):", reply_markup=dice_choice_kb())
+    await m.answer(f"🎲 Ставка: {fmt_full(bet)}$\nВыбери:", reply_markup=dice_choice_kb())
 
 @dp.callback_query(St.dice_bet, F.data.startswith("dice_"))
 async def cb_dice_result(c: CallbackQuery, state: FSMContext):
     if c.data == "dice_start": return
-    try: choice = int(c.data.split("_")[1])
-    except ValueError: return
+    choice = c.data.split("_")[1]
     data = await state.get_data(); bet = data["bet"]; await state.clear()
     roll = random.randint(1, 6)
     u = await db.get_user(c.from_user.id)
-    if roll == choice:
-        payout = bet * 6
+    win, mult = False, 0
+    if choice.isdigit():
+        if int(choice) == roll: win, mult = True, 5
+    elif choice == "low" and roll in [1,2,3]: win, mult = True, 2
+    elif choice == "high" and roll in [4,5,6]: win, mult = True, 2
+    if win:
+        payout = bet * mult
         await db.add_balance(c.from_user.id, payout)
         await db.update(c.from_user.id, wins=u["wins"]+1)
-        text = f"🎲 <b>{roll}</b>\n\n🎉 +{fmt_full(payout-bet)}$ (x6)"
+        text = f"🎲 Выпало: <b>{roll}</b>\n\n🎉 Победа! +{fmt_full(payout - bet)}$ (x{mult})"
     else:
         await db.update(c.from_user.id, losses=u["losses"]+1)
-        text = f"🎲 <b>{roll}</b>\n\n❌ -{fmt_full(bet)}$"
+        text = f"🎲 Выпало: <b>{roll}</b>\n\n❌ Проигрыш: -{fmt_full(bet)}$"
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "noop")
