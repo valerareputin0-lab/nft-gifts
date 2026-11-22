@@ -1,5 +1,5 @@
 # ============ SUPABASE ============
-DATABASE_URL = "postgresql://postgres:Bombastik228@db.miizjvnllvcgdkeaverx.supabase.co:5432/postgres"
+DATABASE_URL = "postgresql://postgres.miizjvnllvcgdkeaverx:Bombastik 228@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
 # ============ BOT ============
 BOT_TOKEN = "9031676987:AAHUik32wXJQWfPaBBYMuTpliKL48fKXOYI"
