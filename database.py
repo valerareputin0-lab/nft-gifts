@@ -10,9 +10,7 @@ async def init_db():
         DATABASE_URL, min_size=1, max_size=5, statement_cache_size=0
     )
     async with _pool.acquire() as c:
-        # Счётчик игровых ID (1001, 1002...)
         await c.execute("CREATE SEQUENCE IF NOT EXISTS user_game_id_seq START 1001")
-        
         await c.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
@@ -24,11 +22,9 @@ async def init_db():
                 btc DOUBLE PRECISION DEFAULT 0,
                 bank_wallet BIGINT DEFAULT 0,
                 last_passive BIGINT DEFAULT 0,
-                last_courier BIGINT DEFAULT 0,
-                last_builder BIGINT DEFAULT 0,
-                last_programmer BIGINT DEFAULT 0,
                 last_bonus BIGINT DEFAULT 0,
                 businesses TEXT DEFAULT '',
+                business_last_collect BIGINT DEFAULT 0,
                 farms TEXT DEFAULT '',
                 houses TEXT DEFAULT '',
                 garage TEXT DEFAULT '',
@@ -42,20 +38,12 @@ async def init_db():
                 losses INTEGER DEFAULT 0
             )
         """)
-        # Миграции для старых баз
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nick TEXT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS game_id BIGINT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT")
-        
-        # Старым игрокам — выдать игровой ID и дату регистрации
-        await c.execute("""
-            UPDATE users SET game_id = nextval('user_game_id_seq')
-            WHERE game_id IS NULL
-        """)
-        await c.execute("""
-            UPDATE users SET registered_at = $1 WHERE registered_at IS NULL
-        """, int(time.time()))
-        
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS business_last_collect BIGINT DEFAULT 0")
+        await c.execute("UPDATE users SET game_id = nextval('user_game_id_seq') WHERE game_id IS NULL")
+        await c.execute("UPDATE users SET registered_at = $1 WHERE registered_at IS NULL", int(time.time()))
         await c.execute("""
             CREATE TABLE IF NOT EXISTS promos (
                 code TEXT PRIMARY KEY, amount BIGINT,
@@ -68,7 +56,6 @@ async def init_db():
                 PRIMARY KEY (code, user_id)
             )
         """)
-
 
 async def get_user(user_id: int, username: str = None):
     async with _pool.acquire() as c:
@@ -83,26 +70,19 @@ async def get_user(user_id: int, username: str = None):
             row = await c.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
         return dict(row)
 
-
 async def get_user_by_id(user_id: int):
     async with _pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
         return dict(row) if row else None
 
-
 async def get_user_rank(user_id: int) -> int:
-    """Место в топе по балансу. При равенстве — по game_id."""
     async with _pool.acquire() as c:
-        u = await c.fetchrow(
-            "SELECT balance, game_id FROM users WHERE user_id=$1", user_id)
-        if not u:
-            return 0
+        u = await c.fetchrow("SELECT balance, game_id FROM users WHERE user_id=$1", user_id)
+        if not u: return 0
         cnt = await c.fetchrow(
-            "SELECT COUNT(*) FROM users "
-            "WHERE balance > $1 OR (balance = $1 AND game_id < $2)",
+            "SELECT COUNT(*) FROM users WHERE balance > $1 OR (balance = $1 AND game_id < $2)",
             u["balance"], u["game_id"])
         return cnt[0] + 1
-
 
 async def update(user_id: int, **kwargs):
     if not kwargs: return
@@ -112,18 +92,15 @@ async def update(user_id: int, **kwargs):
         vals = [user_id] + [kwargs[k] for k in fields]
         await c.execute(f"UPDATE users SET {sets} WHERE user_id=$1", *vals)
 
-
 async def add_balance(user_id: int, amount: int):
     async with _pool.acquire() as c:
         await c.execute("UPDATE users SET balance=balance+$1 WHERE user_id=$2", amount, user_id)
-
 
 async def get_top(limit: int = 10):
     async with _pool.acquire() as c:
         rows = await c.fetch(
             "SELECT username, nick, balance FROM users ORDER BY balance DESC LIMIT $1", limit)
         return [dict(r) for r in rows]
-
 
 async def is_nick_taken(nick: str, exclude_user_id: int = None) -> bool:
     async with _pool.acquire() as c:
@@ -135,13 +112,10 @@ async def is_nick_taken(nick: str, exclude_user_id: int = None) -> bool:
             row = await c.fetchrow("SELECT 1 FROM users WHERE LOWER(nick)=LOWER($1)", nick)
         return row is not None
 
-
 async def set_nick(user_id: int, nick: str):
     async with _pool.acquire() as c:
         await c.execute("UPDATE users SET nick=$1 WHERE user_id=$2", nick, user_id)
 
-
-# ============ ПРОМОКОДЫ ============
 async def create_promo(code: str, amount: int, limit_total: int):
     async with _pool.acquire() as c:
         await c.execute(
@@ -149,12 +123,10 @@ async def create_promo(code: str, amount: int, limit_total: int):
             "ON CONFLICT (code) DO UPDATE SET amount=$2, limit_total=$3, used=0",
             code.upper(), amount, limit_total)
 
-
 async def get_promo(code: str):
     async with _pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM promos WHERE code=$1", code.upper())
         return dict(row) if row else None
-
 
 async def use_promo(code: str, user_id: int):
     async with _pool.acquire() as c:
@@ -162,7 +134,6 @@ async def use_promo(code: str, user_id: int):
             "INSERT INTO promo_uses (code, user_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
             code.upper(), user_id)
         await c.execute("UPDATE promos SET used=used+1 WHERE code=$1", code.upper())
-
 
 async def user_used_promo(code: str, user_id: int) -> bool:
     async with _pool.acquire() as c:
