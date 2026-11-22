@@ -22,7 +22,7 @@ from keyboards import (main_kb, back_kb, profile_kb, biz_shop_kb, biz_confirm_kb
 from config import (BUSINESSES, FARMS, HOUSES, CARS, SKINS, DEPOSITS,
                     MIN_BET, MAX_BET, WITHDRAW_FEE, BTC_PRICE, ADMIN_ID,
                     FARM_CAP_HOURS, CASH_CAP_HOURS, CASH_COLLECT_COOLDOWN,
-                    SELL_PERCENT, BONUS_AMOUNT, BONUS_COOLDOWN,
+                    SELL_PERCENT, BONUS_PERCENT, BONUS_MIN, BONUS_MAX, BONUS_COOLDOWN,
                     GARAGE_PERCENT, BUSINESS_UPGRADE_COST_MULT,
                     NICK_MIN, NICK_MAX, FARMS_LIMIT)
 
@@ -166,11 +166,22 @@ async def cb_profile(c: CallbackQuery):
 @dp.callback_query(F.data == "top")
 async def cb_top(c: CallbackQuery):
     top = await db.get_top(10)
-    medals = ["🥇","🥈","🥉"] + ["▫️"]*7
-    lines = ["🏆 <b>Топ игроков</b>\n"]
-    for i, u in enumerate(top):
-        name = u.get("nick") or (f"@{u['username']}" if u.get("username") else "player")
-        lines.append(f"{medals[i]} {i+1}. {name} — <b>{fmt_full(u['balance'])}$</b>")
+    rank = await db.get_user_rank(c.from_user.id)
+
+    digits = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    lines = [f"💲 {c.from_user.first_name or 'Игрок'}, топ самых лучших игроков:", ""]
+
+    for i in range(10):
+        if i < len(top):
+            u = top[i]
+            name = u.get("nick") or "Игрок"
+            lines.append(f"{digits[i]} {name} — {fmt_full(u['balance'])}$")
+        else:
+            lines.append(f"{digits[i]} —")
+
+    lines.append("")
+    lines.append(f"🌍 Ваша позиция: #{rank}")
+
     await c.message.edit_text("\n".join(lines), reply_markup=back_kb(), parse_mode="HTML")
 
 # ============ БИЗНЕСЫ ============
@@ -622,20 +633,29 @@ async def cb_buy_skin(c: CallbackQuery):
 @dp.callback_query(F.data == "rewards")
 async def cb_rewards(c: CallbackQuery):
     await c.message.edit_text(
-        "🎁 <b>Награды</b>\n\n🎁 Бонус — 5.000$ каждые 12 часов\n"
+        "🎁 <b>Награды</b>\n\n"
+        "🎁 Бонус — 5% от баланса (мин 50.000$, макс 1 млрд$) каждые 12 часов\n"
         "🎟 Промокод — введи секретный код",
         reply_markup=rewards_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bonus")
 async def cb_bonus(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
-    now = int(time.time()); diff = now - u["last_bonus"]
+    now = int(time.time())
+    diff = now - u["last_bonus"]
     if diff < BONUS_COOLDOWN:
         left = BONUS_COOLDOWN - diff
         await c.answer(f"⏰ {left//3600}ч {(left%3600)//60}м", show_alert=True); return
-    await db.add_balance(c.from_user.id, BONUS_AMOUNT)
+
+    bonus = int(u["balance"] * BONUS_PERCENT)
+    if bonus < BONUS_MIN:
+        bonus = BONUS_MIN
+    if bonus > BONUS_MAX:
+        bonus = BONUS_MAX
+
+    await db.add_balance(c.from_user.id, bonus)
     await db.update(c.from_user.id, last_bonus=now)
-    await c.answer(f"🎁 +{fmt_full(BONUS_AMOUNT)}$!", show_alert=True)
+    await c.answer(f"🎁 +{fmt_full(bonus)}$!", show_alert=True)
 
 @dp.callback_query(F.data == "enter_promo")
 async def cb_enter_promo(c: CallbackQuery, state: FSMContext):
@@ -860,7 +880,7 @@ async def cb_casino(c: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "bj_start")
 async def cb_bj_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.bj_bet)
-    await c.message.edit_text("🃏 <b>Блэкджек</b>\n\nВведи ставку:")
+    await c.message.edit_text("🃏 Блэкджек\n\nВведи ставку:")
 
 @dp.message(St.bj_bet)
 async def cb_bj_bet(m: Message, state: FSMContext):
@@ -952,7 +972,7 @@ async def finish_bj(c, state, data):
 @dp.callback_query(F.data == "rl_start")
 async def cb_rl_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.rl_bet)
-    await c.message.edit_text("🎯 <b>Рулетка</b>\n\nВведи ставку:")
+    await c.message.edit_text("🎯 Рулетка\n\nВведи ставку:")
 
 @dp.message(St.rl_bet)
 async def cb_rl_bet(m: Message, state: FSMContext):
@@ -998,7 +1018,7 @@ async def cb_rl_result(c: CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "dice_start")
 async def cb_dice_start(c: CallbackQuery, state: FSMContext):
     await state.set_state(St.dice_bet)
-    await c.message.edit_text("🎲 <b>Кости</b>\n\nВведи ставку:")
+    await c.message.edit_text("🎲 Кости\n\nВведи ставку:")
 
 @dp.message(St.dice_bet)
 async def cb_dice_bet(m: Message, state: FSMContext):
