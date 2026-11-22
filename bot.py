@@ -40,19 +40,15 @@ class St(StatesGroup):
 def is_admin(uid): return uid == ADMIN_ID
 
 def get_biz_dict(u):
-    """Возвращает dict {id: lvl} или {} если нет бизнеса."""
     b = parse_businesses(u["businesses"])
     if len(b) > 1:
-        # на случай старых данных — оставляем первый
         b = {list(b.keys())[0]: list(b.values())[0]}
     return b
 
 def get_farm_info(u):
-    """Возвращает (farm_type, count)."""
     lst = parse_list(u["farms"])
     if not lst: return None, 0
-    ftype = lst[0]
-    return ftype, len(lst)
+    return lst[0], len(lst)
 
 # ============ НИК ============
 async def ask_nick(m, state, source="start"):
@@ -114,36 +110,76 @@ async def cb_profile(c: CallbackQuery):
     uid = c.from_user.id
     await process_passive(uid)
     u = await db.get_user(uid)
+    rank = await db.get_user_rank(uid)
+
     biz = get_biz_dict(u)
     ftype, fcount = get_farm_info(u)
     houses = parse_list(u["houses"])
     cars = parse_list(u["garage"])
-    worn = parse_list(u["clothes_worn"])
 
-    house_bg = "🏙 Улица"
+    reg_ts = u.get("registered_at") or int(time.time())
+    days = int((time.time() - reg_ts) // 86400)
+    if days == 0:
+        reg_str = "сегодня"
+    else:
+        last_two = days % 100
+        last_one = days % 10
+        if 11 <= last_two <= 14:
+            word = "дней"
+        elif last_one == 1:
+            word = "день"
+        elif 2 <= last_one <= 4:
+            word = "дня"
+        else:
+            word = "дней"
+        reg_str = f"{days} {word} назад"
+
+    if u['btc'] == 0:
+        btc_str = "0"
+        btc_usd = 0
+    else:
+        btc_str = fmt_btc(u['btc'])
+        btc_usd = int(u['btc'] * BTC_PRICE)
+
+    imush_lines = []
+    if biz:
+        bid = list(biz.keys())[0]
+        lvl = biz[bid]
+        name = BUSINESSES[bid]["name"].split(" ", 1)[-1]
+        imush_lines.append(f"⠀🚀 Бизнес: {name} ({lvl} lvl)")
+    if ftype:
+        name = FARMS[ftype]["name"].split(" ", 1)[-1]
+        imush_lines.append(f"⠀🔋 Ферма: {name} ({fcount} шт)")
     if houses:
-        house_bg = HOUSES.get(houses[0], {}).get("name", "🏙")
-    car_bg = f"\n🚗 {CARS.get(cars[-1], {}).get('name', '—')}" if cars else ""
-    worn_bg = ("\n👕 " + ", ".join(CLOTHES.get(w, {}).get("name", "?") for w in worn)) if worn else ""
+        name = HOUSES[houses[0]]["name"].split(" ", 1)[-1]
+        imush_lines.append(f"⠀🏠 Дом: {name}")
+    if cars:
+        name = CARS[cars[-1]]["name"].split(" ", 1)[-1]
+        imush_lines.append(f"⠀🚗 Машина: {name}")
 
-    text = (
-        f"👤 <b>Профиль</b>\n"
-        f"🎭 Ник: <b>{u['nick']}</b>\n"
-        f"🆔 ID: <code>{uid}</code>\n\n"
-        f"🏠 Фон: {house_bg}{car_bg}{worn_bg}\n\n"
-        f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n"
-        f"₿ BTC: <b>{fmt_btc(u['btc'])}</b> (≈{fmt_full(int(u['btc']*BTC_PRICE))}$)\n"
-        f"🏦 В банке: <b>{fmt_full(u['bank_wallet'])}$</b>\n\n"
-        f"📊 <b>Имущество:</b>\n"
-        f"💼 Бизнес: {list(biz.keys())[0] if biz else '—'}\n"
-        f"⛏ Ферм: {fcount}\n"
-        f"🏠 Дом: {'есть' if houses else '—'}\n\n"
-        f"🎮 Побед: {u['wins']} | ❌ Поражений: {u['losses']}")
-    if u["deposit_amount"] > 0:
-        left = int(u["deposit_end"] - time.time())
-        if left > 0:
-            text += f"\n\n📈 Вклад: {fmt_full(u['deposit_amount'])}$ до {left//3600}ч"
-    await c.message.edit_text(text, reply_markup=profile_kb(), parse_mode="HTML")
+    lines = [
+        f"👻 {u.get('nick') or 'Игрок'}, профиль:",
+        "",
+        f"🔎 Игровой ID: {u.get('game_id') or '—'}",
+        f"💰 Баланс: {fmt_full(u['balance'])}$",
+        f"🏦 Счет: {fmt_full(u['bank_wallet'])}$",
+        f"₿ Bitcoin: {btc_str} (~{fmt_full(btc_usd)}$)",
+        f"👑 Рейтинг в топе: {rank}",
+        "",
+    ]
+    if imush_lines:
+        lines.append("🗄 Имущество:")
+        lines.extend(imush_lines)
+    else:
+        lines.append("🗄 Имущество: пока нету")
+    lines.append("")
+    lines.append(f"⌚ Регистрация: {reg_str}")
+
+    await c.message.edit_text(
+        "\n".join(lines),
+        reply_markup=profile_kb(),
+        parse_mode="HTML"
+    )
 
 @dp.callback_query(F.data == "top")
 async def cb_top(c: CallbackQuery):
@@ -151,7 +187,7 @@ async def cb_top(c: CallbackQuery):
     medals = ["🥇","🥈","🥉"] + ["▫️"]*7
     lines = ["🏆 <b>Топ игроков</b>\n"]
     for i, u in enumerate(top):
-        name = u.get("nick") or f"@{u['username']}" if u.get("username") else (u.get("nick") or "player")
+        name = u.get("nick") or (f"@{u['username']}" if u.get("username") else "player")
         lines.append(f"{medals[i]} {i+1}. {name} — <b>{fmt_full(u['balance'])}$</b>")
     await c.message.edit_text("\n".join(lines), reply_markup=back_kb(), parse_mode="HTML")
 
@@ -179,7 +215,7 @@ async def cb_work(c: CallbackQuery):
     await c.answer(f"✅ +{fmt_full(job['income'])}$", show_alert=True)
     await cb_jobs(c)
 
-# ============ БИЗНЕСЫ (1 активный) ============
+# ============ БИЗНЕСЫ ============
 @dp.callback_query(F.data == "biz")
 async def cb_biz(c: CallbackQuery):
     await process_passive(c.from_user.id)
@@ -261,7 +297,7 @@ async def cb_sell_biz(c: CallbackQuery):
     await c.answer(f"💸 Продан за {fmt_full(sell)}$", show_alert=True)
     await cb_biz(c)
 
-# ============ ФЕРМЫ (тип фиксируется после первой покупки) ============
+# ============ ФЕРМЫ ============
 @dp.callback_query(F.data == "farms")
 async def cb_farms(c: CallbackQuery):
     await process_passive(c.from_user.id)
@@ -328,7 +364,7 @@ async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
         f"₿ У тебя {fmt_btc(u['btc'])} BTC\n"
         f"Курс: 1₿ = {fmt_full(BTC_PRICE)}$\n\nСколько BTC продать?")
 
-# ============ ДОМА (1 активный) ============
+# ============ ДОМА ============
 @dp.callback_query(F.data == "houses")
 async def cb_houses(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
@@ -458,7 +494,6 @@ async def cb_buy_cloth(c: CallbackQuery):
     owned.append(key)
     await db.update(c.from_user.id, wardrobe=serialize_list(owned))
     await c.answer(f"✅ {cl['name']} куплено", show_alert=True)
-    # Возвращаемся откуда пришли
     if c.message.text and "Шкаф" in c.message.text:
         await cb_wardrobe(c)
     else:
