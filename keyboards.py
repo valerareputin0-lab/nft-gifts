@@ -1,5 +1,5 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import (BUSINESSES, FARMS, HOUSES, CARS, CLOTHES, DEPOSITS,
+from config import (BUSINESSES, FARMS, HOUSES, CARS, SKINS, DEPOSITS,
                     BUSINESS_LEVEL_MULT, BUSINESS_UPGRADE_COST_MULT,
                     SELL_PERCENT, GARAGE_PRICE, FARMS_LIMIT)
 from utils import parse_businesses, business_income, fmt_short, fmt_full
@@ -31,7 +31,6 @@ def profile_kb():
 
 # ============ БИЗНЕСЫ ============
 def biz_shop_kb():
-    """Меню покупки бизнесов (цифры)."""
     buttons, row = [], []
     for i, key in enumerate(BUSINESSES.keys(), 1):
         row.append(InlineKeyboardButton(text=str(i), callback_data=f"biz_info_{key}"))
@@ -96,7 +95,7 @@ def houses_kb(has_house, house_id):
         h = HOUSES[house_id]
         sell = int(h["price"] * SELL_PERCENT)
         rows.append([InlineKeyboardButton(text="🚗 Гараж", callback_data="garage"),
-                     InlineKeyboardButton(text="👕 Шкаф", callback_data="wardrobe")])
+                     InlineKeyboardButton(text="👔 Шкаф", callback_data="wardrobe")])
         rows.append([InlineKeyboardButton(
             text=f"💸 Продать дом (+{fmt_short(sell)}$)",
             callback_data=f"sellhouse_{house_id}")])
@@ -125,27 +124,25 @@ def garage_kb(has_garage, cars_owned):
 
 def wardrobe_kb(owned, worn):
     rows = []
-    for key, cl in CLOTHES.items():
+    for key, skin in SKINS.items():
         if key in owned:
             is_worn = key in worn
-            label = f"{'✅' if is_worn else '👕'} {cl['name']} {'(снять)' if is_worn else '(надеть)'}"
+            label = f"{'✅' if is_worn else '👔'} {skin['name']} {'(снять)' if is_worn else '(надеть)'}"
             rows.append([InlineKeyboardButton(text=label, callback_data=f"wear_{key}")])
-        else:
-            rows.append([InlineKeyboardButton(
-                text=f"{cl['name']} — {fmt_short(cl['price'])}$",
-                callback_data=f"buycloth_{key}")])
+    if not owned:
+        rows.append([InlineKeyboardButton(text="Пусто (купи в магазине)", callback_data="noop")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="houses")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def shop_kb(owned):
     rows = []
-    for key, cl in CLOTHES.items():
+    for key, skin in SKINS.items():
         if key in owned:
-            rows.append([InlineKeyboardButton(text=f"✅ {cl['name']}", callback_data="noop")])
+            rows.append([InlineKeyboardButton(text=f"✅ {skin['name']}", callback_data="noop")])
         else:
             rows.append([InlineKeyboardButton(
-                text=f"{cl['name']} — {fmt_short(cl['price'])}$",
-                callback_data=f"buycloth_{key}")])
+                text=f"{skin['name']} — {fmt_short(skin['price'])}$",
+                callback_data=f"buyskin_{key}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -162,17 +159,24 @@ def admin_kb():
         [InlineKeyboardButton(text="🎟 Создать промокод", callback_data="admin_promo")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
-def bank_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💵 Внести в банк", callback_data="bank_dep_in")],
+def bank_kb(has_deposit, deposit_ready):
+    rows = [
+        [InlineKeyboardButton(text="💵 Внести на счёт", callback_data="bank_dep_in")],
         [InlineKeyboardButton(text="💸 Снять (3%)", callback_data="bank_dep_out")],
-        [InlineKeyboardButton(text="📈 Открыть вклад", callback_data="bank_open")],
-        [InlineKeyboardButton(text="📊 Мой вклад", callback_data="bank_view")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
+    ]
+    if has_deposit:
+        if deposit_ready:
+            rows.append([InlineKeyboardButton(text="✅ Забрать вклад", callback_data="bank_view")])
+        else:
+            rows.append([InlineKeyboardButton(text="📊 Мой вклад", callback_data="bank_view")])
+    else:
+        rows.append([InlineKeyboardButton(text="📈 Открыть вклад", callback_data="bank_open")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def deposits_kb():
     rows = [[InlineKeyboardButton(
-        text=f"{d['name']} — {int(d['rate']*100)}%", callback_data=f"dep_{k}")]
+        text=f"{d['name']} — +{int(d['rate']*100)}%", callback_data=f"dep_{k}")]
         for k, d in DEPOSITS.items()]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="bank")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
