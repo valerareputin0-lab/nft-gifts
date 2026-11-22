@@ -23,6 +23,8 @@ async def init_db():
                 bank_wallet BIGINT DEFAULT 0,
                 last_passive BIGINT DEFAULT 0,
                 last_bonus BIGINT DEFAULT 0,
+                last_active BIGINT DEFAULT 0,
+                is_banned INTEGER DEFAULT 0,
                 businesses TEXT DEFAULT '',
                 business_last_collect BIGINT DEFAULT 0,
                 farms TEXT DEFAULT '',
@@ -41,15 +43,19 @@ async def init_db():
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nick TEXT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS game_id BIGINT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active BIGINT DEFAULT 0")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS business_last_collect BIGINT DEFAULT 0")
         await c.execute("UPDATE users SET game_id = nextval('user_game_id_seq') WHERE game_id IS NULL")
         await c.execute("UPDATE users SET registered_at = $1 WHERE registered_at IS NULL", int(time.time()))
         await c.execute("""
             CREATE TABLE IF NOT EXISTS promos (
                 code TEXT PRIMARY KEY, amount BIGINT,
-                limit_total INTEGER, used INTEGER DEFAULT 0
+                limit_total INTEGER, used INTEGER DEFAULT 0,
+                active INTEGER DEFAULT 1
             )
         """)
+        await c.execute("ALTER TABLE promos ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1")
         await c.execute("""
             CREATE TABLE IF NOT EXISTS promo_uses (
                 code TEXT, user_id BIGINT,
@@ -63,8 +69,8 @@ async def get_user(user_id: int, username: str = None):
         if row is None:
             now = int(time.time())
             await c.execute(
-                "INSERT INTO users (user_id, username, game_id, registered_at) "
-                "VALUES ($1, $2, nextval('user_game_id_seq'), $3)",
+                "INSERT INTO users (user_id, username, game_id, registered_at, last_active) "
+                "VALUES ($1, $2, nextval('user_game_id_seq'), $3, $3)",
                 user_id, username or "player", now
             )
             row = await c.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
@@ -73,6 +79,11 @@ async def get_user(user_id: int, username: str = None):
 async def get_user_by_id(user_id: int):
     async with _pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM users WHERE user_id=$1", user_id)
+        return dict(row) if row else None
+
+async def get_user_by_game_id(game_id: int):
+    async with _pool.acquire() as c:
+        row = await c.fetchrow("SELECT * FROM users WHERE game_id=$1", game_id)
         return dict(row) if row else None
 
 async def get_user_rank(user_id: int) -> int:
@@ -96,6 +107,10 @@ async def add_balance(user_id: int, amount: int):
     async with _pool.acquire() as c:
         await c.execute("UPDATE users SET balance=balance+$1 WHERE user_id=$2", amount, user_id)
 
+async def touch_active(user_id: int):
+    async with _pool.acquire() as c:
+        await c.execute("UPDATE users SET last_active=$1 WHERE user_id=$2", int(time.time()), user_id)
+
 async def get_top(limit: int = 10):
     async with _pool.acquire() as c:
         rows = await c.fetch(
@@ -116,17 +131,72 @@ async def set_nick(user_id: int, nick: str):
     async with _pool.acquire() as c:
         await c.execute("UPDATE users SET nick=$1 WHERE user_id=$2", nick, user_id)
 
+async def count_all() -> int:
+    async with _pool.acquire() as c:
+        row = await c.fetchrow("SELECT COUNT(*) FROM users")
+        return row[0]
+
+async def count_banned() -> int:
+    async with _pool.acquire() as c:
+        row = await c.fetchrow("SELECT COUNT(*) FROM users WHERE is_banned=1")
+        return row[0]
+
+async def get_online(seconds: int = 300):
+    async with _pool.acquire() as c:
+        cutoff = int(time.time()) - seconds
+        rows = await c.fetch(
+            "SELECT game_id, nick, user_id FROM users "
+            "WHERE last_active >= $1 AND is_banned=0 ORDER BY last_active DESC",
+            cutoff)
+        return [dict(r) for r in rows]
+
+async def get_all_users():
+    async with _pool.acquire() as c:
+        rows = await c.fetch("SELECT * FROM users")
+        return [dict(r) for r in rows]
+
+async def reset_user(user_id: int):
+    async with _pool.acquire() as c:
+        await c.execute("""
+            UPDATE users SET
+                balance=1000, btc=0, bank_wallet=0,
+                businesses='', business_last_collect=0,
+                farms='', houses='', garage='', garage_bought=0,
+                wardrobe='', clothes_worn='',
+                deposit_amount=0, deposit_end=0, deposit_rate=0,
+                wins=0, losses=0, last_bonus=0
+            WHERE user_id=$1
+        """, user_id)
+
+async def reset_all():
+    async with _pool.acquire() as c:
+        await c.execute("""
+            UPDATE users SET
+                balance=1000, btc=0, bank_wallet=0,
+                businesses='', business_last_collect=0,
+                farms='', houses='', garage='', garage_bought=0,
+                wardrobe='', clothes_worn='',
+                deposit_amount=0, deposit_end=0, deposit_rate=0,
+                wins=0, losses=0, last_bonus=0
+        """)
+
 async def create_promo(code: str, amount: int, limit_total: int):
     async with _pool.acquire() as c:
         await c.execute(
-            "INSERT INTO promos (code, amount, limit_total, used) VALUES ($1,$2,$3,0) "
-            "ON CONFLICT (code) DO UPDATE SET amount=$2, limit_total=$3, used=0",
+            "INSERT INTO promos (code, amount, limit_total, used, active) VALUES ($1,$2,$3,0,1) "
+            "ON CONFLICT (code) DO UPDATE SET amount=$2, limit_total=$3, used=0, active=1",
             code.upper(), amount, limit_total)
 
 async def get_promo(code: str):
     async with _pool.acquire() as c:
         row = await c.fetchrow("SELECT * FROM promos WHERE code=$1", code.upper())
         return dict(row) if row else None
+
+async def deactivate_promo(code: str) -> bool:
+    async with _pool.acquire() as c:
+        result = await c.execute(
+            "UPDATE promos SET active=0 WHERE code=$1 AND active=1", code.upper())
+        return result.split()[-1] != "0"
 
 async def use_promo(code: str, user_id: int):
     async with _pool.acquire() as c:
