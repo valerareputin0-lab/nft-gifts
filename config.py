@@ -13,10 +13,14 @@ PASSIVE_CAP_HOURS = 48
 WITHDRAW_FEE = 0.03
 SELL_PERCENT = 0.05
 
+NICK_MIN = 3
+NICK_MAX = 20
+
 BONUS_AMOUNT = 5000
 BONUS_COOLDOWN = 12 * 3600
 
 GARAGE_PRICE = 200_000
+FARMS_LIMIT = 9999
 
 JOBS = {
     "courier":    {"name": "🍔 Курьер",       "income": 1500,  "cooldown": 300},
