@@ -6,7 +6,7 @@ BOT_TOKEN = "9031676987:AAEAMl_VXjvh6GGNFTUgIHKmNa8DuSxX3fM"
 ADMIN_ID = 222619025
 
 START_BALANCE = 1000
-BTC_PRICE = 60000
+BTC_PRICE = 110_000
 MIN_BET = 100
 MAX_BET = 10_000_000_000_000
 FARM_CAP_HOURS = 48
@@ -36,9 +36,9 @@ BUSINESS_LEVEL_MULT = {1: 1.0, 2: 1.10, 3: 1.30}
 BUSINESS_UPGRADE_COST_MULT = {2: 1.5, 3: 2.5}
 
 FARMS = {
-    "farm1": {"name": "⛏ Ферма-1", "price": 12_000_000, "btc_per_hour": 8.33},
-    "farm2": {"name": "⛏ Ферма-2", "price": 36_000_000, "btc_per_hour": 25.0},
-    "farm3": {"name": "⛏ Ферма-3", "price": 96_000_000, "btc_per_hour": 66.67},
+    "aorus": {"name": "🔋 Aorus", "price": 60_000_000,  "btc_per_hour": 1},
+    "palit": {"name": "🔋 Palit", "price": 180_000_000, "btc_per_hour": 3},
+    "asus":  {"name": "🔋 Asus",  "price": 480_000_000, "btc_per_hour": 5},
 }
 
 HOUSES = {
