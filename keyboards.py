@@ -66,20 +66,15 @@ def farms_kb(farm_type, count):
     if farm_type is None:
         for key, f in FARMS.items():
             rows.append([InlineKeyboardButton(
-                text=f"{f['name']} — {fmt_short(f['price'])}$ (+{f['btc_per_hour']}₿/ч)",
+                text=f"{f['name']} — {fmt_short(f['price'])}$ (+{f['btc_per_hour']}฿/ч)",
                 callback_data=f"buyfarm_{key}")])
     else:
-        f = FARMS[farm_type]
-        if count < FARMS_LIMIT:
-            rows.append([InlineKeyboardButton(
-                text=f"➕ Купить {f['name']} — {fmt_short(f['price'])}$ ({count}/{FARMS_LIMIT})",
-                callback_data=f"buyfarm_{farm_type}")])
-        else:
-            rows.append([InlineKeyboardButton(text=f"✅ Лимит {FARMS_LIMIT}",
-                                              callback_data="noop")])
-        rows.append([InlineKeyboardButton(text="💸 Продать 1 ферму",
-                                          callback_data="sell_one_farm")])
-    rows.append([InlineKeyboardButton(text="₿ Продать BTC", callback_data="farms_sellbtc")])
+        rows.append([InlineKeyboardButton(text="₿ Продать биткоины",
+                                          callback_data="farms_sellbtc")])
+        rows.append([
+            InlineKeyboardButton(text="➕ Купить фермы", callback_data="farm_buy_menu"),
+            InlineKeyboardButton(text="➖ Продать фермы", callback_data="farm_sell_menu"),
+        ])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
