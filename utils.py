@@ -32,7 +32,6 @@ def serialize_list(lst):
     return ",".join(lst)
 
 def parse_businesses(s):
-    """dict {id: level}, поддержка старого формата"""
     result = {}
     if not s: return result
     for item in s.split(","):
