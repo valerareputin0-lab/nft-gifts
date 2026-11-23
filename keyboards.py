@@ -29,7 +29,6 @@ def profile_kb():
         [InlineKeyboardButton(text="✏️ Сменить ник", callback_data="change_nick")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
-# ============ БИЗНЕСЫ ============
 def biz_shop_kb():
     buttons, row = [], []
     for i, key in enumerate(BUSINESSES.keys(), 1):
@@ -60,7 +59,6 @@ def biz_manage_kb(bid, lvl, has_cash):
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-# ============ ФЕРМЫ ============
 def farms_kb(farm_type, count):
     rows = []
     if farm_type is None:
@@ -78,7 +76,6 @@ def farms_kb(farm_type, count):
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-# ============ ДОМА ============
 def houses_kb(has_house, house_id, has_garage):
     rows = []
     if not has_house:
@@ -173,11 +170,15 @@ def deposits_kb():
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="bank")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+# ============ КАЗИНО ============
 def casino_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎯 Рулетка", callback_data="rl_start"),
-         InlineKeyboardButton(text="🃏 Блэкджек", callback_data="bj_start")],
-        [InlineKeyboardButton(text="🎲 Кости", callback_data="dice_start")],
+        [InlineKeyboardButton(text="🎯 Рулетка — угадай цвет/число (x2–x30)",
+                              callback_data="rl_info")],
+        [InlineKeyboardButton(text="🃏 Блэкджек — набери 21 (x2)",
+                              callback_data="bj_info")],
+        [InlineKeyboardButton(text="🎲 Кости — угадай число (x2–x5)",
+                              callback_data="dice_info")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
 
 def bj_kb():
@@ -218,7 +219,8 @@ def admin_main_kb():
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats"),
          InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")],
         [InlineKeyboardButton(text="👤 Профиль игрока", callback_data="adm_view_profile")],
-        [InlineKeyboardButton(text="⚙️ Глобальные действия", callback_data="adm_global_menu")],
+        [InlineKeyboardButton(text="👑 Выдать админку", callback_data="adm_give_admin")],
+        [InlineKeyboardButton(text="⚙️ Глобальные", callback_data="adm_global_menu")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")],
     ])
 
@@ -244,8 +246,8 @@ def admin_prop_kb():
 
 def admin_ban_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🚫 Заблокировать", callback_data="adm_ban")],
-        [InlineKeyboardButton(text="✅ Разблокировать", callback_data="adm_unban")],
+        [InlineKeyboardButton(text="🚫 Забанить", callback_data="adm_ban")],
+        [InlineKeyboardButton(text="✅ Разбанить", callback_data="adm_unban")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
 
 def admin_global_kb():
@@ -285,4 +287,27 @@ def admin_farm_select_kb(prefix):
     for key, f in FARMS.items():
         rows.append([InlineKeyboardButton(text=f["name"], callback_data=f"{prefix}_{key}")])
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_prop_farm")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+# ============ АДМИН ПРАВА (галочки) ============
+ADMIN_PERMS = {
+    "money":  "💰 Деньги",
+    "btc":    "₿ BTC",
+    "prop":   "🏢 Имущество",
+    "ban":    "🚫 Блокировка",
+    "stats":  "📊 Статистика",
+    "promo":  "🎟 Промокоды",
+    "view":   "👤 Профиль",
+    "admins": "👑 Выдать админку",
+}
+
+def admin_perms_kb(target_game_id: int, perms: list):
+    rows = []
+    for key, label in ADMIN_PERMS.items():
+        mark = "✅" if key in perms else "☐"
+        rows.append([InlineKeyboardButton(
+            text=f"{mark} {label}", callback_data=f"admperm_toggle_{key}")])
+    rows.append([InlineKeyboardButton(text="💾 Сохранить", callback_data="admperm_save")])
+    rows.append([InlineKeyboardButton(text="🗑 Забрать админку", callback_data="admperm_take")])
+    rows.append([InlineKeyboardButton(text="⬅️ Отмена", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
