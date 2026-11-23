@@ -25,6 +25,9 @@ async def init_db():
                 last_bonus BIGINT DEFAULT 0,
                 last_active BIGINT DEFAULT 0,
                 is_banned INTEGER DEFAULT 0,
+                ban_until BIGINT DEFAULT 0,
+                is_admin INTEGER DEFAULT 0,
+                admin_perms TEXT DEFAULT '',
                 businesses TEXT DEFAULT '',
                 business_last_collect BIGINT DEFAULT 0,
                 farms TEXT DEFAULT '',
@@ -40,11 +43,15 @@ async def init_db():
                 losses INTEGER DEFAULT 0
             )
         """)
+        # Миграции
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nick TEXT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS game_id BIGINT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_active BIGINT DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_banned INTEGER DEFAULT 0")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_until BIGINT DEFAULT 0")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin INTEGER DEFAULT 0")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_perms TEXT DEFAULT ''")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS business_last_collect BIGINT DEFAULT 0")
         await c.execute("UPDATE users SET game_id = nextval('user_game_id_seq') WHERE game_id IS NULL")
         await c.execute("UPDATE users SET registered_at = $1 WHERE registered_at IS NULL", int(time.time()))
@@ -138,7 +145,10 @@ async def count_all() -> int:
 
 async def count_banned() -> int:
     async with _pool.acquire() as c:
-        row = await c.fetchrow("SELECT COUNT(*) FROM users WHERE is_banned=1")
+        now = int(time.time())
+        row = await c.fetchrow(
+            "SELECT COUNT(*) FROM users WHERE is_banned=1 AND (ban_until=0 OR ban_until > $1)",
+            now)
         return row[0]
 
 async def get_online(seconds: int = 300):
@@ -164,7 +174,8 @@ async def reset_user(user_id: int):
                 farms='', houses='', garage='', garage_bought=0,
                 wardrobe='', clothes_worn='',
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
-                wins=0, losses=0, last_bonus=0
+                wins=0, losses=0, last_bonus=0,
+                is_admin=0, admin_perms=''
             WHERE user_id=$1
         """, user_id)
 
@@ -179,6 +190,21 @@ async def reset_all():
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
                 wins=0, losses=0, last_bonus=0
         """)
+
+async def reset_full(user_id: int):
+    """Полное обнуление (для пермабана 999 дней)"""
+    async with _pool.acquire() as c:
+        await c.execute("""
+            UPDATE users SET
+                balance=1000, btc=0, bank_wallet=0,
+                businesses='', business_last_collect=0,
+                farms='', houses='', garage='', garage_bought=0,
+                wardrobe='', clothes_worn='',
+                deposit_amount=0, deposit_end=0, deposit_rate=0,
+                wins=0, losses=0, last_bonus=0,
+                nick=NULL, is_admin=0, admin_perms=''
+            WHERE user_id=$1
+        """, user_id)
 
 async def create_promo(code: str, amount: int, limit_total: int):
     async with _pool.acquire() as c:
