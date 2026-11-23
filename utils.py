@@ -13,7 +13,6 @@ def fmt_full(n):
     return ("-" if n < 0 else "") + ".".join(parts)
 
 def fmt_short(n):
-    """20 млн, 1.2 млрд, 70 тыс"""
     n = int(n)
     if n >= 10**9:  return f"{n/10**9:.2f} млрд".rstrip('0').rstrip('.') + " "
     if n >= 10**6:  return f"{n/10**6:.2f} млн".rstrip('0').rstrip('.') + " "
@@ -68,9 +67,7 @@ def total_business_income(biz_dict):
 def total_farm_income(farms_list):
     return sum(FARMS[f]["btc_per_hour"] for f in farms_list if f in FARMS)
 
-# ============ БИЗНЕС-КАССА ============
 def calc_business_cash(u):
-    """Возвращает (текущая_касса, лимит_кассы, доход_в_час)."""
     biz = parse_businesses(u["businesses"])
     if not biz: return 0, 0, 0
     bid = list(biz.keys())[0]
@@ -83,27 +80,25 @@ def calc_business_cash(u):
     return cash, cap, income
 
 async def collect_business(user_id):
-    """Собрать доход. Возвращает (сумма, оставшийся_кулдаун)."""
     u = await db.get_user(user_id)
     cash, _, _ = calc_business_cash(u)
     now = int(time.time())
     last = u.get("business_last_collect") or now
     elapsed = now - last
-    if elapsed < CASH_COLLECT_COOLDOWN:
-        return 0, CASH_COLLECT_COOLDOWN - elapsed
-    if cash <= 0:
-        return 0, 0
+    if elapsed < CASH_COLLECT_COOLDOWN: return 0, CASH_COLLECT_COOLDOWN - elapsed
+    if cash <= 0: return 0, 0
     await db.add_balance(user_id, cash)
     await db.update(user_id, business_last_collect=now)
     return cash, 0
 
-# ============ ФЕРМЫ (пассив BTC) ============
 async def process_farms(user_id):
+    """Начисляет BTC с ферм за прошедшее время."""
     user = await db.get_user(user_id)
     now = int(time.time())
     last = user["last_passive"] or now
     elapsed = min(now - last, FARM_CAP_HOURS * 3600)
-    if elapsed < 60: return 0
+    if elapsed < 60:
+        return 0
     farms = parse_list(user["farms"])
     farm_btc = total_farm_income(farms) * elapsed / 3600
     if farm_btc > 0:
