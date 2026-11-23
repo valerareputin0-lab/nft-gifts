@@ -2,7 +2,7 @@ import asyncio, time, random, os
 from datetime import datetime
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -34,7 +34,7 @@ bot = Bot(token=config.BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 BTC_CURRENT = BTC_PRICE
-MAX_AMOUNT = 999_999_999_999_999_999  # 999ккккккк
+MAX_AMOUNT = 999_999_999_999_999_999
 
 class St(StatesGroup):
     bj_bet = State(); bj_play = State()
@@ -57,27 +57,23 @@ class St(StatesGroup):
     adm_promo_create = State(); adm_promo_delete = State()
     adm_give_admin = State()
 
-# ============ УТИЛИТЫ ============
 def is_main_admin(uid): return uid == ADMIN_ID
 
 def has_perm(user, perm):
     if user["user_id"] == ADMIN_ID: return True
     if not user.get("is_admin"): return False
-    perms = user.get("admin_perms", "").split(",")
+    perms = (user.get("admin_perms") or "").split(",")
     return perm in perms
 
 async def check_banned(uid):
-    """Возвращает None или текст бана."""
     u = await db.get_user(uid)
     if not u.get("is_banned"): return None
     until = u.get("ban_until", 0)
     now = int(time.time())
-    if until == 0:
-        return "🚫 Ты забанен навсегда."
+    if until == 0: return "🚫 Ты забанен навсегда."
     if until > now:
         date = datetime.fromtimestamp(until).strftime("%d.%m.%Y %H:%M")
         return f"🚫 Ты забанен до {date}."
-    # Бан истёк — снимаем
     await db.update(uid, is_banned=0, ban_until=0)
     return None
 
@@ -85,10 +81,7 @@ async def check_banned(uid):
 async def ask_nick(m, state, source="start"):
     await state.set_state(St.nick_input)
     await state.update_data(nick_from=source)
-    await m.answer(
-        f"🎭 Придумай ник\n\n"
-        f"Правила:\n• {NICK_MIN}–{NICK_MAX} символов\n"
-        f"• Только буквы и цифры\n• Должен быть уникальным")
+    await m.answer(f"🎭 Придумай ник\n\n• {NICK_MIN}–{NICK_MAX} символов\n• Только буквы и цифры\n• Должен быть уникальным")
 
 @dp.message(St.nick_input)
 async def process_nick(m: Message, state: FSMContext):
@@ -101,11 +94,10 @@ async def process_nick(m: Message, state: FSMContext):
         await m.answer("❌ Ник занят"); return
     await db.set_nick(m.from_user.id, nick)
     data = await state.get_data(); await state.clear()
+    u = await db.get_user(m.from_user.id)
     if data.get("nick_from") == "change":
-        await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML",
-                       reply_markup=back_kb("profile"))
+        await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML", reply_markup=back_kb("profile"))
     else:
-        u = await db.get_user(m.from_user.id)
         await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML",
                        reply_markup=main_kb(is_main_admin(m.from_user.id) or bool(u.get("is_admin"))))
 
@@ -114,21 +106,19 @@ async def process_nick(m: Message, state: FSMContext):
 async def cmd_start(m: Message, state: FSMContext):
     u = await db.get_user(m.from_user.id, m.from_user.username)
     await db.touch_active(m.from_user.id)
-    ban_text = await check_banned(m.from_user.id)
-    if ban_text:
-        await m.answer(ban_text); return
+    ban = await check_banned(m.from_user.id)
+    if ban: await m.answer(ban); return
     if not u.get("nick"):
         await ask_nick(m, state, "start"); return
     await m.answer(
-        f"🎰 <b>Добро пожаловать, {u['nick']}!</b>\n\n"
-        f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n📋 Разделы ниже 👇",
+        f"🎰 <b>Добро пожаловать, {u['nick']}!</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n📋 Разделы ниже 👇",
         reply_markup=main_kb(is_main_admin(m.from_user.id) or bool(u.get("is_admin"))), parse_mode="HTML")
 
 @dp.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery, state: FSMContext):
     await state.clear()
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     await db.touch_active(c.from_user.id)
     await c.message.edit_text("🏠 <b>Главное меню</b>",
@@ -136,27 +126,23 @@ async def cb_menu(c: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "change_nick")
 async def cb_change_nick(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await ask_nick(c.message, state, "change"); await c.answer()
 
 # ============ ПРОФИЛЬ ============
 @dp.callback_query(F.data == "profile")
 async def cb_profile(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     uid = c.from_user.id
     await process_farms(uid)
     u = await db.get_user(uid)
     rank = await db.get_user_rank(uid)
-    biz = parse_businesses(u["businesses"])
-    biz = {k: v for k, v in biz.items() if k in BUSINESSES}
-    lst_f = parse_list(u["farms"])
-    ftype = lst_f[0] if lst_f else None
-    fcount = len(lst_f)
-    houses = parse_list(u["houses"])
-    cars = parse_list(u["garage"])
+    biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
+    lst_f = parse_list(u["farms"]); ftype = lst_f[0] if lst_f else None; fcount = len(lst_f)
+    houses = parse_list(u["houses"]); cars = parse_list(u["garage"])
 
     reg_ts = u.get("registered_at") or int(time.time())
     days = int((time.time() - reg_ts) // 86400)
@@ -175,17 +161,13 @@ async def cb_profile(c: CallbackQuery):
     imush = []
     if biz:
         bid = list(biz.keys())[0]
-        name = BUSINESSES[bid]["name"].split(" ", 1)[-1]
-        imush.append(f"⠀🚀 Бизнес: {name} ({biz[bid]} lvl)")
+        imush.append(f"⠀🚀 Бизнес: {BUSINESSES[bid]['name'].split(' ',1)[-1]} ({biz[bid]} lvl)")
     if ftype:
-        name = FARMS[ftype]["name"].split(" ", 1)[-1]
-        imush.append(f"⠀🔋 Ферма: {name} ({fcount} шт)")
+        imush.append(f"⠀🔋 Ферма: {FARMS[ftype]['name'].split(' ',1)[-1]} ({fcount} шт)")
     if houses:
-        name = HOUSES[houses[0]]["name"].split(" ", 1)[-1]
-        imush.append(f"⠀🏠 Дом: {name}")
+        imush.append(f"⠀🏠 Дом: {HOUSES[houses[0]]['name'].split(' ',1)[-1]}")
     if cars:
-        name = CARS[cars[-1]]["name"].split(" ", 1)[-1]
-        imush.append(f"⠀🚗 Машина: {name}")
+        imush.append(f"⠀🚗 Машина: {CARS[cars[-1]]['name'].split(' ',1)[-1]}")
 
     lines = [
         f"👻 {u.get('nick') or 'Игрок'}, профиль:", "",
@@ -199,13 +181,12 @@ async def cb_profile(c: CallbackQuery):
     else:
         lines.append("🗄 Имущество: пока нету")
     lines.append(""); lines.append(f"⌚ Регистрация: {reg_str}")
-
     await c.message.edit_text("\n".join(lines), reply_markup=profile_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "top")
 async def cb_top(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     top = await db.get_top(10)
     rank = await db.get_user_rank(c.from_user.id)
@@ -213,8 +194,7 @@ async def cb_top(c: CallbackQuery):
     lines = [f"💲 {c.from_user.first_name or 'Игрок'}, топ самых лучших игроков:", ""]
     for i in range(10):
         if i < len(top):
-            u = top[i]; name = u.get("nick") or "Игрок"
-            lines.append(f"{digits[i]} {name} — {fmt_full(u['balance'])}$")
+            u = top[i]; lines.append(f"{digits[i]} {u.get('nick') or 'Игрок'} — {fmt_full(u['balance'])}$")
         else:
             lines.append(f"{digits[i]} —")
     lines.append(""); lines.append(f"🌍 Ваша позиция: #{rank}")
@@ -223,20 +203,18 @@ async def cb_top(c: CallbackQuery):
 # ============ БИЗНЕСЫ ============
 @dp.callback_query(F.data == "biz")
 async def cb_biz(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     u = await db.get_user(c.from_user.id)
-    biz = parse_businesses(u["businesses"])
-    biz = {k: v for k, v in biz.items() if k in BUSINESSES}
+    biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
     if biz:
         bid = list(biz.keys())[0]; lvl = biz[bid]; b = BUSINESSES[bid]
         cash, cap, income = calc_business_cash(u)
-        text = (f"🚀 {u['nick']}, статистика «{b['name'].split(' ', 1)[-1]}»:\n\n"
+        text = (f"🚀 {u['nick']}, статистика «{b['name'].split(' ',1)[-1]}»:\n\n"
                 f"💸 Доход: {fmt_short(income // 60)}$в минуту\n"
                 f"💰 В кассе: {fmt_short(cash)}$ из {fmt_short(cap)}$\n"
-                f"📊 Уровень: {lvl}/3\n\n━━━━━━━━━━━━━━━\n"
-                f"💼 Бизнес продаётся с комиссией 5%")
+                f"📊 Уровень: {lvl}/3\n\n━━━━━━━━━━━━━━━\n💼 Комиссия продажи 5%")
         await c.message.edit_text(text, reply_markup=biz_manage_kb(bid, lvl, cash > 0), parse_mode="HTML")
     else:
         lines = [f"💼 {u['nick']}, обеспечь себя ДЕНЬГАМИ! Список бизнесов:", ""]
@@ -254,36 +232,32 @@ async def cb_biz_info(c: CallbackQuery):
     if bid not in BUSINESSES: return
     b = BUSINESSES[bid]; u = await db.get_user(c.from_user.id)
     can = u["balance"] >= b["price"]
-    text = (f"{b['name']}\n\n💵 Цена: {fmt_short(b['price'])}$\n"
-            f"📈 Прибыль: {fmt_short(b['income'])}$ в час\n\n"
-            f"💰 Твой баланс: {fmt_full(u['balance'])}$\n\n"
-            f"{'✅ Можешь купить!' if can else '❌ Не хватает денег'}")
+    text = (f"{b['name']}\n\n💵 Цена: {fmt_short(b['price'])}$\n📈 Прибыль: {fmt_short(b['income'])}$ в час\n\n"
+            f"💰 Баланс: {fmt_full(u['balance'])}$\n\n{'✅ Можешь купить!' if can else '❌ Не хватает'}")
     await c.message.edit_text(text, reply_markup=biz_confirm_kb(bid), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buybiz_"))
 async def cb_buy_biz(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     bid = c.data.split("_")[1]
     if bid not in BUSINESSES: return
     b = BUSINESSES[bid]; u = await db.get_user(c.from_user.id)
-    biz = parse_businesses(u["businesses"])
-    biz = {k: v for k, v in biz.items() if k in BUSINESSES}
+    biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
     if biz: await c.answer("Уже есть бизнес!", show_alert=True); return
-    if u["balance"] < b["price"]: await c.answer("❌ Мало денег!", show_alert=True); return
+    if u["balance"] < b["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -b["price"])
     await db.update(c.from_user.id, businesses=serialize_businesses({bid: 1}), business_last_collect=int(time.time()))
-    await c.answer(f"✅ Куплен {b['name']}!", show_alert=True); await cb_biz(c)
+    await c.answer(f"✅ {b['name']}!", show_alert=True); await cb_biz(c)
 
 @dp.callback_query(F.data.startswith("upbiz_"))
 async def cb_upgrade_biz(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     bid = c.data.split("_")[1]
     if bid not in BUSINESSES: return
     b = BUSINESSES[bid]; u = await db.get_user(c.from_user.id)
-    biz = parse_businesses(u["businesses"])
-    biz = {k: v for k, v in biz.items() if k in BUSINESSES}
+    biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
     if bid not in biz: await c.answer("Нет бизнеса", show_alert=True); return
     lvl = biz[bid]
     if lvl >= 3: await c.answer("Максимум!", show_alert=True); return
@@ -292,27 +266,26 @@ async def cb_upgrade_biz(c: CallbackQuery):
     cash, _, _ = calc_business_cash(u)
     await db.add_balance(c.from_user.id, -cost)
     await db.update(c.from_user.id, businesses=serialize_businesses({bid: lvl + 1}), business_last_collect=int(time.time()))
-    await c.answer(f"✅ Lvl {lvl+1}! Касса: {fmt_short(cash)}$", show_alert=True); await cb_biz(c)
+    await c.answer(f"✅ Lvl {lvl+1}!", show_alert=True); await cb_biz(c)
 
 @dp.callback_query(F.data == "biz_collect")
 async def cb_biz_collect(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     amount, cd = await collect_business(c.from_user.id)
-    if cd > 0: await c.answer(f"⏳ Подожди {cd} сек", show_alert=True); return
+    if cd > 0: await c.answer(f"⏳ {cd} сек", show_alert=True); return
     if amount == 0: await c.answer("Касса пуста", show_alert=True); return
     await c.answer(f"💰 +{fmt_full(amount)}$", show_alert=True); await cb_biz(c)
 
 @dp.callback_query(F.data.startswith("sellbiz_"))
 async def cb_sell_biz(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     bid = c.data.split("_")[1]
     if bid not in BUSINESSES: return
     u = await db.get_user(c.from_user.id)
-    biz = parse_businesses(u["businesses"])
-    biz = {k: v for k, v in biz.items() if k in BUSINESSES}
-    if bid not in biz: await c.answer("Нет бизнеса", show_alert=True); return
+    biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
+    if bid not in biz: await c.answer("Нет", show_alert=True); return
     cash, _, _ = calc_business_cash(u)
     sell = int(BUSINESSES[bid]["price"] * (1 - SELL_PERCENT))
     await db.add_balance(c.from_user.id, cash + sell)
@@ -322,16 +295,15 @@ async def cb_sell_biz(c: CallbackQuery):
 # ============ ФЕРМЫ ============
 @dp.callback_query(F.data == "farms")
 async def cb_farms(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     await process_farms(c.from_user.id)
     u = await db.get_user(c.from_user.id)
-    lst = parse_list(u["farms"])
-    ftype = lst[0] if lst else None; fcount = len(lst)
+    lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
     if ftype:
         f = FARMS[ftype]; total = total_farm_income(lst)
-        text = (f"⛏️ Ферма {f['name'].split(' ', 1)[-1]} ({fcount}шт)\n\n"
+        text = (f"⛏️ Ферма {f['name'].split(' ',1)[-1]} ({fcount}шт)\n\n"
                 f"💰 Заработок в час: {total:.0f}฿\n"
                 f"⛏️ Количество ферм: {fcount}\n"
                 f"₿ Курс Bitcoin: {fmt_short(BTC_CURRENT)}$\n"
@@ -345,99 +317,90 @@ async def cb_farms(c: CallbackQuery):
             lines.append(f"⠀• В наличии: 0 шт.")
             lines.append("")
         lines.append(f"💰 Твой баланс: {fmt_full(u['balance'])}$")
-        lines.append(f"₿ Курс Bitcoin: {fmt_short(BTC_CURRENT)}$")
+        lines.append(f"₿ Курс: {fmt_short(BTC_CURRENT)}$")
         text = "\n".join(lines)
     await c.message.edit_text(text, reply_markup=farms_kb(ftype, fcount), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buyfarm_"))
 async def cb_buy_farm_choose(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in FARMS: return
     u = await db.get_user(c.from_user.id)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None
-    if ftype and ftype != key:
-        await c.answer("❌ Можно покупать только твой тип!", show_alert=True); return
+    if ftype and ftype != key: await c.answer("❌ Только твой тип!", show_alert=True); return
     f = FARMS[key]
     await state.update_data(farm_key=key); await state.set_state(St.farm_buy_qty)
-    await c.message.edit_text(
-        f"➕ Покупка {f['name']}\n\n💵 Цена за 1: {fmt_short(f['price'])}$\n"
-        f"💰 Твой баланс: {fmt_full(u['balance'])}$\n\nСколько ферм купить?")
+    await c.message.edit_text(f"➕ {f['name']}\n\n💵 Цена: {fmt_short(f['price'])}$\n💰 Баланс: {fmt_full(u['balance'])}$\n\nСколько купить?")
 
 @dp.message(St.farm_buy_qty)
 async def cb_buy_farm_qty(m: Message, state: FSMContext):
     try: qty = int(m.text.strip())
-    except ValueError: await m.answer("❌ Введи число"); return
-    if qty <= 0: await m.answer("❌ Кол-во > 0"); return
+    except: await m.answer("❌ Число"); return
+    if qty <= 0: await m.answer("❌ > 0"); return
     data = await state.get_data(); key = data["farm_key"]; f = FARMS[key]
     u = await db.get_user(m.from_user.id)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
-    if ftype and ftype != key: await m.answer("❌ Только твой тип!"); await state.clear(); return
-    if fcount + qty > FARMS_LIMIT: await m.answer("❌ Слишком много"); await state.clear(); return
-    total_cost = f["price"] * qty
-    if u["balance"] < total_cost:
-        await m.answer(f"❌ Нужно {fmt_full(total_cost)}$"); await state.clear(); return
-    await db.add_balance(m.from_user.id, -total_cost)
+    if ftype and ftype != key: await m.answer("❌ Только твой!"); await state.clear(); return
+    if fcount + qty > FARMS_LIMIT: await m.answer("❌ Много"); await state.clear(); return
+    total = f["price"] * qty
+    if u["balance"] < total: await m.answer(f"❌ Нужно {fmt_full(total)}$"); await state.clear(); return
+    await db.add_balance(m.from_user.id, -total)
     lst = lst + [key] * qty
     await db.update(m.from_user.id, farms=serialize_list(lst))
     await state.clear()
-    await m.answer(f"✅ Куплено {qty} × {f['name']} за {fmt_full(total_cost)}$", reply_markup=back_kb("farms"))
+    await m.answer(f"✅ {qty} × {f['name']} за {fmt_full(total)}$", reply_markup=back_kb("farms"))
 
 @dp.callback_query(F.data == "farm_buy_menu")
 async def cb_farm_buy_menu(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None
-    if not ftype: await c.answer("Сначала купи тип фермы!", show_alert=True); return
-    f = FARMS[ftype]; await state.update_data(farm_key=ftype); await state.set_state(St.farm_buy_qty)
-    await c.message.edit_text(
-        f"➕ Покупка {f['name']}\n\n💵 Цена за 1: {fmt_short(f['price'])}$\n"
-        f"💰 Твой баланс: {fmt_full(u['balance'])}$\n\nСколько ферм купить?")
+    if not ftype: await c.answer("Купи тип!", show_alert=True); return
+    f = FARMS[ftype]
+    await state.update_data(farm_key=ftype); await state.set_state(St.farm_buy_qty)
+    await c.message.edit_text(f"➕ {f['name']}\n\n💵 {fmt_short(f['price'])}$\n💰 {fmt_full(u['balance'])}$\n\nСколько?")
 
 @dp.callback_query(F.data == "farm_sell_menu")
 async def cb_farm_sell_menu(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
     if not ftype or fcount == 0: await c.answer("Нет ферм", show_alert=True); return
-    f = FARMS[ftype]; sell_price = int(f["price"] * (1 - SELL_PERCENT))
+    f = FARMS[ftype]; sp = int(f["price"] * (1 - SELL_PERCENT))
     await state.set_state(St.farm_sell_qty)
-    await c.message.edit_text(
-        f"➖ Продажа {f['name']}\n\n💵 Цена за 1: {fmt_short(sell_price)}$ (комиссия 5%)\n"
-        f"⛏️ У тебя: {fcount} шт\n\nСколько ферм продать?")
+    await c.message.edit_text(f"➖ {f['name']}\n\n💵 За 1: {fmt_short(sp)}$ (-5%)\n⛏️ Есть: {fcount}\n\nСколько продать?")
 
 @dp.message(St.farm_sell_qty)
 async def cb_sell_farm_qty(m: Message, state: FSMContext):
     try: qty = int(m.text.strip())
-    except ValueError: await m.answer("❌ Число"); return
+    except: await m.answer("❌ Число"); return
     if qty <= 0: await m.answer("❌ > 0"); return
     u = await db.get_user(m.from_user.id)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
-    if not ftype or fcount == 0: await m.answer("❌ Нет ферм"); await state.clear(); return
-    if qty > fcount: await m.answer(f"❌ У тебя только {fcount}"); await state.clear(); return
+    if not ftype or fcount == 0: await m.answer("❌ Нет"); await state.clear(); return
+    if qty > fcount: await m.answer(f"❌ Только {fcount}"); await state.clear(); return
     await process_farms(m.from_user.id); u = await db.get_user(m.from_user.id)
-    f = FARMS[ftype]; sell_price = int(f["price"] * (1 - SELL_PERCENT)); total = sell_price * qty
+    f = FARMS[ftype]; total = int(f["price"] * (1 - SELL_PERCENT)) * qty
     await db.add_balance(m.from_user.id, total)
     lst = parse_list(u["farms"])
     for _ in range(qty):
         if lst: lst.pop()
     await db.update(m.from_user.id, farms=serialize_list(lst))
     await state.clear()
-    await m.answer(f"✅ Продано {qty} × {f['name']} за {fmt_full(total)}$", reply_markup=back_kb("farms"))
+    await m.answer(f"✅ {qty} × {f['name']} за {fmt_full(total)}$", reply_markup=back_kb("farms"))
 
 @dp.callback_query(F.data == "farms_sellbtc")
 async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     if u["btc"] < 0.001: await c.answer("Мало BTC", show_alert=True); return
     await state.set_state(St.sell_btc)
-    await c.message.edit_text(
-        f"₿ У тебя {fmt_btc(u['btc'])}₿\nКурс: 1₿ = {fmt_full(BTC_CURRENT)}$\n"
-        f"💰 Всего: ≈{fmt_full(int(u['btc']*BTC_CURRENT))}$\n\nСколько BTC продать?")
+    await c.message.edit_text(f"₿ У тебя {fmt_btc(u['btc'])}₿\nКурс: {fmt_full(BTC_CURRENT)}$\n\nСколько продать?")
 
 @dp.message(St.sell_btc)
 async def cb_sell_btc_amount(m: Message, state: FSMContext):
@@ -453,47 +416,43 @@ async def cb_sell_btc_amount(m: Message, state: FSMContext):
 # ============ ДОМА ============
 @dp.callback_query(F.data == "houses")
 async def cb_houses(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     u = await db.get_user(c.from_user.id)
     houses = parse_list(u["houses"])
     if houses:
         hid = houses[0]; h = HOUSES[hid]
-        text = (f"🏠 <b>Твой дом</b>\n\n{h['name']}\n"
-                f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n"
-                f"Доступно: Гараж, Шкаф, продажа дома.")
+        text = f"🏠 <b>Твой дом</b>\n\n{h['name']}\n\n💰 {fmt_full(u['balance'])}$"
         await c.message.edit_text(text, reply_markup=houses_kb(True, hid, bool(u["garage_bought"])), parse_mode="HTML")
     else:
-        lines = [f"🏠 {u['nick']}, приобрети собственную НЕДВИЖИМОСТЬ!", ""]
+        lines = [f"🏠 {u['nick']}, приобрети НЕДВИЖИМОСТЬ!", ""]
         for i, (key, h) in enumerate(HOUSES.items(), 1):
-            lines.append(f"{i}. {h['name']}")
-            lines.append(f"⠀• Цена: {fmt_short(h['price'])}$")
-            lines.append("")
-        lines.append(f"💳 Твой баланс: {fmt_full(u['balance'])}$")
+            lines.append(f"{i}. {h['name']} — {fmt_short(h['price'])}$")
+        lines.append(""); lines.append(f"💳 Баланс: {fmt_full(u['balance'])}$")
         await c.message.edit_text("\n".join(lines), reply_markup=houses_kb(False, None, False), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buyhouse_"))
 async def cb_buy_house(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in HOUSES: return
     h = HOUSES[key]; u = await db.get_user(c.from_user.id)
     if parse_list(u["houses"]): await c.answer("Уже есть дом!", show_alert=True); return
-    if u["balance"] < h["price"]: await c.answer("❌ Мало денег!", show_alert=True); return
+    if u["balance"] < h["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -h["price"])
     await db.update(c.from_user.id, houses=key, garage_bought=0, garage="")
-    await c.answer(f"✅ Куплен {h['name']}!", show_alert=True); await cb_houses(c)
+    await c.answer(f"✅ {h['name']}!", show_alert=True); await cb_houses(c)
 
 @dp.callback_query(F.data.startswith("sellhouse_"))
 async def cb_sell_house(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in HOUSES: return
     u = await db.get_user(c.from_user.id)
-    if key not in parse_list(u["houses"]): await c.answer("Нет дома", show_alert=True); return
+    if key not in parse_list(u["houses"]): await c.answer("Нет", show_alert=True); return
     sell = int(HOUSES[key]["price"] * SELL_PERCENT)
     await db.add_balance(c.from_user.id, sell)
     await db.update(c.from_user.id, houses="", garage_bought=0, garage="")
@@ -502,79 +461,77 @@ async def cb_sell_house(c: CallbackQuery):
 # ============ ГАРАЖ ============
 @dp.callback_query(F.data == "garage")
 async def cb_garage(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
-    if not parse_list(u["houses"]): await c.answer("Сначала купи дом!", show_alert=True); return
+    if not parse_list(u["houses"]): await c.answer("Купи дом!", show_alert=True); return
     if not u["garage_bought"]: await c.answer("Гараж не куплен!", show_alert=True); return
     cars = parse_list(u["garage"])
     if cars:
-        text = (f"🚗 <b>Гараж</b>\n\nТвоя машина: <b>{CARS[cars[0]]['name']}</b>\n\n"
-                f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>")
+        text = f"🚗 <b>Гараж</b>\n\nМашина: <b>{CARS[cars[0]]['name']}</b>\n\n💰 {fmt_full(u['balance'])}$"
     else:
-        lines = [f"🚗 {u['nick']}, выберите машину:", ""]
+        lines = [f"🚗 {u['nick']}, выбери машину:", ""]
         for key, c_info in CARS.items():
             lines.append(f"{c_info['name']} — {fmt_short(c_info['price'])}$")
-        lines.append(""); lines.append(f"💰 Баланс: {fmt_full(u['balance'])}$")
+        lines.append(""); lines.append(f"💰 {fmt_full(u['balance'])}$")
         text = "\n".join(lines)
     await c.message.edit_text(text, reply_markup=garage_kb(cars), parse_mode="HTML")
 
 @dp.callback_query(F.data == "buygarage")
 async def cb_buy_garage(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
-    if u["garage_bought"]: await c.answer("Уже куплен!", show_alert=True); return
+    if u["garage_bought"]: await c.answer("Уже!", show_alert=True); return
     houses = parse_list(u["houses"])
-    if not houses: await c.answer("Сначала купи дом!", show_alert=True); return
-    garage_price = int(HOUSES[houses[0]]["price"] * GARAGE_PERCENT)
-    if u["balance"] < garage_price: await c.answer(f"❌ Нужно {fmt_short(garage_price)}$", show_alert=True); return
-    await db.add_balance(c.from_user.id, -garage_price)
+    if not houses: await c.answer("Купи дом!", show_alert=True); return
+    price = int(HOUSES[houses[0]]["price"] * GARAGE_PERCENT)
+    if u["balance"] < price: await c.answer(f"❌ {fmt_short(price)}$", show_alert=True); return
+    await db.add_balance(c.from_user.id, -price)
     await db.update(c.from_user.id, garage_bought=1)
-    await c.answer(f"✅ Гараж за {fmt_short(garage_price)}$!", show_alert=True); await cb_houses(c)
+    await c.answer(f"✅ Гараж за {fmt_short(price)}$", show_alert=True); await cb_houses(c)
 
 @dp.callback_query(F.data.startswith("buycar_"))
 async def cb_buy_car(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in CARS: return
     car = CARS[key]; u = await db.get_user(c.from_user.id)
-    if not u["garage_bought"]: await c.answer("Сначала гараж!", show_alert=True); return
-    if parse_list(u["garage"]): await c.answer("Уже есть машина!", show_alert=True); return
-    if u["balance"] < car["price"]: await c.answer("❌ Мало денег!", show_alert=True); return
+    if not u["garage_bought"]: await c.answer("Купи гараж!", show_alert=True); return
+    if parse_list(u["garage"]): await c.answer("Уже есть!", show_alert=True); return
+    if u["balance"] < car["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -car["price"])
     await db.update(c.from_user.id, garage=key)
     await c.answer(f"✅ {car['name']}!", show_alert=True); await cb_garage(c)
 
 @dp.callback_query(F.data.startswith("sellcar_"))
 async def cb_sell_car(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in CARS: return
     u = await db.get_user(c.from_user.id); cars = parse_list(u["garage"])
-    if not cars or cars[0] != key: await c.answer("Нет машины", show_alert=True); return
+    if not cars or cars[0] != key: await c.answer("Нет", show_alert=True); return
     sell = int(CARS[key]["price"] * SELL_PERCENT)
     await db.add_balance(c.from_user.id, sell)
     await db.update(c.from_user.id, garage="")
-    await c.answer(f"💸 +{fmt_full(sell)}$", show_alert=True); await cb_garage(c)
+    await c.answer(f"💸 {fmt_full(sell)}$", show_alert=True); await cb_garage(c)
 
 # ============ ШКАФ ============
 @dp.callback_query(F.data == "wardrobe")
 async def cb_wardrobe(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
-    if not parse_list(u["houses"]): await c.answer("Сначала дом!", show_alert=True); return
-    await c.message.edit_text(
-        f"👔 <b>Шкаф скинов</b>\n\n💰 Баланс: <b>{fmt_full(u['balance'])}$</b>",
+    if not parse_list(u["houses"]): await c.answer("Купи дом!", show_alert=True); return
+    await c.message.edit_text(f"👔 <b>Шкаф</b>\n\n💰 {fmt_full(u['balance'])}$",
         reply_markup=wardrobe_kb(parse_list(u["wardrobe"]), parse_list(u["clothes_worn"])), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("wear_"))
 async def cb_wear(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in SKINS: return
     u = await db.get_user(c.from_user.id); worn = parse_list(u["clothes_worn"])
@@ -585,24 +542,24 @@ async def cb_wear(c: CallbackQuery):
 # ============ МАГАЗИН ============
 @dp.callback_query(F.data == "shop")
 async def cb_shop(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
-    u = await db.get_user(c.from_user.id); owned = parse_list(u["wardrobe"])
-    lines = [f"🛒 Магазин скинов", "", f"💰 Баланс: {fmt_full(u['balance'])}$", ""]
+    u = await db.get_user(c.from_user.id)
+    lines = [f"🛒 Магазин скинов", "", f"💰 {fmt_full(u['balance'])}$", ""]
     for i, (key, skin) in enumerate(SKINS.items(), 1):
         lines.append(f"{i}. {skin['name']} — {fmt_short(skin['price'])}$")
-    lines.append(""); lines.append("Выбери скин:")
-    await c.message.edit_text("\n".join(lines), reply_markup=shop_kb(owned), parse_mode="HTML")
+    lines.append(""); lines.append("Выбери:")
+    await c.message.edit_text("\n".join(lines), reply_markup=shop_kb(parse_list(u["wardrobe"])), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("buyskin_"))
 async def cb_buy_skin(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in SKINS: return
     skin = SKINS[key]; u = await db.get_user(c.from_user.id); owned = parse_list(u["wardrobe"])
-    if key in owned: await c.answer("Уже куплено!", show_alert=True); return
+    if key in owned: await c.answer("Уже!", show_alert=True); return
     if u["balance"] < skin["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -skin["price"]); owned.append(key)
     await db.update(c.from_user.id, wardrobe=serialize_list(owned))
@@ -611,32 +568,32 @@ async def cb_buy_skin(c: CallbackQuery):
 # ============ НАГРАДЫ ============
 @dp.callback_query(F.data == "rewards")
 async def cb_rewards(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     await c.message.edit_text(
-        "🎁 <b>Награды</b>\n\n🎁 Бонус — 5% от баланса (мин 50.000$, макс 1 млрд$) каждые 12 часов\n"
-        "🎟 Промокод — введи секретный код", reply_markup=rewards_kb(), parse_mode="HTML")
+        "🎁 <b>Награды</b>\n\n🎁 Бонус — 5% от баланса (мин 50.000, макс 1 млрд) каждые 12ч\n🎟 Промокод",
+        reply_markup=rewards_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bonus")
 async def cb_bonus(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id); now = int(time.time()); diff = now - u["last_bonus"]
     if diff < BONUS_COOLDOWN:
         left = BONUS_COOLDOWN - diff
         await c.answer(f"⏰ {left//3600}ч {(left%3600)//60}м", show_alert=True); return
-    bonus = int(u["balance"] * BONUS_PERCENT)
-    if bonus < BONUS_MIN: bonus = BONUS_MIN
-    if bonus > BONUS_MAX: bonus = BONUS_MAX
-    await db.add_balance(c.from_user.id, bonus)
+    b = int(u["balance"] * BONUS_PERCENT)
+    if b < BONUS_MIN: b = BONUS_MIN
+    if b > BONUS_MAX: b = BONUS_MAX
+    await db.add_balance(c.from_user.id, b)
     await db.update(c.from_user.id, last_bonus=now)
-    await c.answer(f"🎁 +{fmt_full(bonus)}$!", show_alert=True)
+    await c.answer(f"🎁 +{fmt_full(b)}$!", show_alert=True)
 
 @dp.callback_query(F.data == "enter_promo")
 async def cb_enter_promo(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await state.set_state(St.promo_enter); await c.message.edit_text("🎟 Введи промокод:")
 
 @dp.message(St.promo_enter)
@@ -652,8 +609,8 @@ async def cb_promo_submit(m: Message, state: FSMContext):
 # ============ БАНК ============
 @dp.callback_query(F.data == "bank")
 async def cb_bank(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id)
     u = await db.get_user(c.from_user.id)
     has_dep = u["deposit_amount"] > 0
@@ -665,16 +622,16 @@ async def cb_bank(c: CallbackQuery):
         profit = int(u["deposit_amount"] * u["deposit_rate"])
         lines.append(""); lines.append(f"📈 Вклад: <b>{fmt_full(u['deposit_amount'])}$</b>")
         lines.append(f"💵 Доход: <b>+{fmt_full(profit)}$</b>")
-        if ready: lines.append(f"✅ <b>Вклад готов!</b>")
+        if ready: lines.append(f"✅ <b>Готов к снятию!</b>")
         else: lines.append(f"📅 Окончание: <b>{datetime.fromtimestamp(u['deposit_end']).strftime('%d.%m.%Y')}</b>")
     lines.append(""); lines.append("💸 Комиссия снятия: 3%")
     await c.message.edit_text("\n".join(lines), reply_markup=bank_kb(has_dep, ready), parse_mode="HTML")
 
 @dp.callback_query(F.data == "bank_dep_in")
 async def cb_bank_in(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
-    await state.set_state(St.bank_in); await c.message.edit_text("💵 Введи сумму для внесения:")
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
+    await state.set_state(St.bank_in); await c.message.edit_text("💵 Введи сумму:")
 
 @dp.message(St.bank_in)
 async def cb_bank_in_amount(m: Message, state: FSMContext):
@@ -685,13 +642,13 @@ async def cb_bank_in_amount(m: Message, state: FSMContext):
     if u["balance"] < amount: await m.answer("❌ Мало"); await state.clear(); return
     await db.add_balance(m.from_user.id, -amount)
     await db.update(m.from_user.id, bank_wallet=u["bank_wallet"] + amount)
-    await state.clear(); await m.answer(f"✅ +{fmt_full(amount)}$ на счёт", reply_markup=back_kb("bank"))
+    await state.clear(); await m.answer(f"✅ +{fmt_full(amount)}$", reply_markup=back_kb("bank"))
 
 @dp.callback_query(F.data == "bank_dep_out")
 async def cb_bank_out(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
-    await state.set_state(St.bank_out); await c.message.edit_text("💸 Введи сумму для снятия (3%):")
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
+    await state.set_state(St.bank_out); await c.message.edit_text("💸 Введи сумму (3%):")
 
 @dp.message(St.bank_out)
 async def cb_bank_out_amount(m: Message, state: FSMContext):
@@ -707,25 +664,23 @@ async def cb_bank_out_amount(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "bank_open")
 async def cb_bank_open(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     if u["deposit_amount"] > 0: await c.answer("❌ Уже есть вклад", show_alert=True); return
-    await c.message.edit_text(
-        "📈 <b>Вклады</b>\n\n• 1 день — +1%\n• 7 дней — +10%\n• 30 дней — +35%",
+    await c.message.edit_text("📈 <b>Вклады</b>\n\n• 1 день — +1%\n• 7 дней — +10%\n• 30 дней — +35%",
         reply_markup=deposits_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("dep_"))
 async def cb_dep(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     key = c.data.split("_")[1]
     if key not in DEPOSITS: return
     u = await db.get_user(c.from_user.id)
-    if u["deposit_amount"] > 0: await c.answer("❌ Уже есть вклад", show_alert=True); return
+    if u["deposit_amount"] > 0: await c.answer("❌ Уже есть", show_alert=True); return
     d = DEPOSITS[key]; await state.update_data(dep_key=key); await state.set_state(St.dep_amount)
-    await c.message.edit_text(
-        f"{d['name']} — +{int(d['rate']*100)}%\n\n💰 Доступно: {fmt_full(u['bank_wallet'])}$\n\nВведи сумму:")
+    await c.message.edit_text(f"{d['name']} — +{int(d['rate']*100)}%\n\n💰 Счёт: {fmt_full(u['bank_wallet'])}$\n\nСумма?")
 
 @dp.message(St.dep_amount)
 async def cb_dep_amount(m: Message, state: FSMContext):
@@ -737,12 +692,12 @@ async def cb_dep_amount(m: Message, state: FSMContext):
     await db.update(m.from_user.id, bank_wallet=u["bank_wallet"] - amount, deposit_amount=amount,
         deposit_end=int(time.time()) + d["seconds"], deposit_rate=d["rate"])
     await state.clear()
-    await m.answer(f"✅ Вклад {fmt_full(amount)}$\n💵 +{fmt_full(int(amount*d['rate']))}$", reply_markup=back_kb("bank"))
+    await m.answer(f"✅ {fmt_full(amount)}$\n💵 +{fmt_full(int(amount*d['rate']))}$", reply_markup=back_kb("bank"))
 
 @dp.callback_query(F.data == "bank_view")
 async def cb_bank_view(c: CallbackQuery):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     if u["deposit_amount"] == 0: await c.answer("Нет вклада", show_alert=True); return
     left = int(u["deposit_end"] - time.time())
@@ -757,26 +712,20 @@ async def cb_bank_view(c: CallbackQuery):
 # ============ КАЗИНО ============
 @dp.callback_query(F.data == "casino")
 async def cb_casino(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await db.touch_active(c.from_user.id); await state.clear()
     await c.message.edit_text(
         "🎰 <b>Казино</b>\n\n"
-        "🎯 Рулетка — угадай число или цвет (x2–x30)\n"
-        "🃏 Блэкджек — набери 21, обыграй дилера (x2)\n"
-        "🎲 Кости — угадай число или больше/меньше (x2–x5)\n\n"
-        "Выбери игру:",
+        "🎯 Рулетка — угадай цвет/число (x2–x30)\n"
+        "🃏 Блэкджек — набери 21 (x2)\n"
+        "🎲 Кости — угадай число (x2–x5)\n\nВыбери:",
         reply_markup=casino_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "rl_info")
 async def cb_rl_info(c: CallbackQuery):
     await c.message.edit_text(
-        "🎯 <b>Рулетка</b>\n\n"
-        "🎯 Европейская, числа 0-36\n"
-        "🔴 Красное x2 | ⚫ Чёрное x2 | 🟢 Зеро x30\n"
-        "Чёт x2 | Нечет x2\n"
-        "1-12 x3 | 13-24 x3 | 25-36 x3\n\n"
-        "Введи ставку чтобы играть:",
+        "🎯 <b>Рулетка</b>\n\n🎯 0-36\n🔴 Красное x2 | ⚫ Чёрное x2 | 🟢 Зеро x30\nЧёт x2 | Нечет x2\n1-12 x3 | 13-24 x3 | 25-36 x3\n\nВведи ставку:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="▶️ Играть", callback_data="rl_start")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]]),
@@ -785,12 +734,7 @@ async def cb_rl_info(c: CallbackQuery):
 @dp.callback_query(F.data == "bj_info")
 async def cb_bj_info(c: CallbackQuery):
     await c.message.edit_text(
-        "🃏 <b>Блэкджек</b>\n\n"
-        "Цель — набрать 21, не перебрать.\n"
-        "Блэкджек (21 с 2 карт) → x2.5\n"
-        "Обычная победа → x2\n"
-        "Ничья → возврат ставки\n\n"
-        "Введи ставку чтобы играть:",
+        "🃏 <b>Блэкджек</b>\n\nЦель — 21, не перебрать.\nБлэкджек (21 с 2) → x2.5\nПобеда → x2\nНичья → возврат\n\nВведи ставку:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="▶️ Играть", callback_data="bj_start")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]]),
@@ -799,11 +743,7 @@ async def cb_bj_info(c: CallbackQuery):
 @dp.callback_query(F.data == "dice_info")
 async def cb_dice_info(c: CallbackQuery):
     await c.message.edit_text(
-        "🎲 <b>Кости</b>\n\n"
-        "Угадай число (1-6) → x5\n"
-        "Меньше (1-3) → x2\n"
-        "Больше (4-6) → x2\n\n"
-        "Введи ставку чтобы играть:",
+        "🎲 <b>Кости</b>\n\nЧисло (1-6) → x5\nМеньше (1-3) → x2\nБольше (4-6) → x2\n\nВведи ставку:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="▶️ Играть", callback_data="dice_start")],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="casino")]]),
@@ -811,16 +751,16 @@ async def cb_dice_info(c: CallbackQuery):
 
 @dp.callback_query(F.data == "bj_start")
 async def cb_bj_start(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await state.set_state(St.bj_bet)
-    await c.message.edit_text(f"🃏 Блэкджек\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nВведи ставку:")
+    await c.message.edit_text(f"🃏 Блэкджек\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nСтавка:")
 
 @dp.message(St.bj_bet)
 async def cb_bj_bet(m: Message, state: FSMContext):
     bet = parse_amount(m.text)
     if not bet or bet < 1000: await m.answer("❌ Мин. 1.000$"); return
-    if bet > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if bet > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user(m.from_user.id)
     if u["balance"] < bet: await m.answer("❌ Мало"); await state.clear(); return
     await db.add_balance(m.from_user.id, -bet)
@@ -836,8 +776,7 @@ async def cb_bj_bet(m: Message, state: FSMContext):
         win = int(bet * 2.5); await db.add_balance(m.from_user.id, win)
         await db.update(m.from_user.id, wins=u["wins"]+1); await state.clear()
         await m.answer(f"🎉 БЛЭКДЖЕК! +{fmt_full(win-bet)}$", reply_markup=casino_kb(), parse_mode="HTML"); return
-    await m.answer(
-        f"🃏 Ставка: {fmt_full(bet)}$\n\n👤 {fmt_hand(player)} = <b>{pv}</b>\n🤖 {dealer[0]} ?",
+    await m.answer(f"🃏 {fmt_full(bet)}$\n\n👤 {fmt_hand(player)} = <b>{pv}</b>\n🤖 {dealer[0]} ?",
         reply_markup=bj_kb(), parse_mode="HTML")
 
 @dp.callback_query(St.bj_play, F.data == "bj_hit")
@@ -893,20 +832,20 @@ async def finish_bj(c, state, data):
 
 @dp.callback_query(F.data == "rl_start")
 async def cb_rl_start(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await state.set_state(St.rl_bet)
-    await c.message.edit_text(f"🎯 Рулетка\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nВведи ставку:")
+    await c.message.edit_text(f"🎯 Рулетка\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nСтавка:")
 
 @dp.message(St.rl_bet)
 async def cb_rl_bet(m: Message, state: FSMContext):
     bet = parse_amount(m.text)
     if not bet or bet < 1000: await m.answer("❌ Мин. 1.000$"); return
-    if bet > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if bet > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user(m.from_user.id)
     if u["balance"] < bet: await m.answer("❌ Мало"); await state.clear(); return
     await db.add_balance(m.from_user.id, -bet); await state.update_data(bet=bet)
-    await m.answer(f"🎯 Ставка: {fmt_full(bet)}$", reply_markup=rl_choice_kb())
+    await m.answer(f"🎯 {fmt_full(bet)}$", reply_markup=rl_choice_kb())
 
 @dp.callback_query(St.rl_bet, F.data.startswith("rl_"))
 async def cb_rl_result(c: CallbackQuery, state: FSMContext):
@@ -927,28 +866,28 @@ async def cb_rl_result(c: CallbackQuery, state: FSMContext):
     if win:
         payout = bet * mult; await db.add_balance(c.from_user.id, payout)
         await db.update(c.from_user.id, wins=u["wins"]+1)
-        text = f"🎯 Выпало: {emoji} <b>{num}</b>\n\n✅ +{fmt_full(payout - bet)}$ (x{mult})"
+        text = f"🎯 {emoji} <b>{num}</b>\n\n✅ +{fmt_full(payout - bet)}$ (x{mult})"
     else:
         await db.update(c.from_user.id, losses=u["losses"]+1)
-        text = f"🎯 Выпало: {emoji} <b>{num}</b>\n\n❌ -{fmt_full(bet)}$"
+        text = f"🎯 {emoji} <b>{num}</b>\n\n❌ -{fmt_full(bet)}$"
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "dice_start")
 async def cb_dice_start(c: CallbackQuery, state: FSMContext):
-    ban_text = await check_banned(c.from_user.id)
-    if ban_text: await c.answer(ban_text, show_alert=True); return
+    ban = await check_banned(c.from_user.id)
+    if ban: await c.answer(ban, show_alert=True); return
     await state.set_state(St.dice_bet)
-    await c.message.edit_text(f"🎲 Кости\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nВведи ставку:")
+    await c.message.edit_text(f"🎲 Кости\n\nМин: 1.000$ | Макс: {fmt_full(MAX_AMOUNT)}$\n\nСтавка:")
 
 @dp.message(St.dice_bet)
 async def cb_dice_bet(m: Message, state: FSMContext):
     bet = parse_amount(m.text)
     if not bet or bet < 1000: await m.answer("❌ Мин. 1.000$"); return
-    if bet > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if bet > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user(m.from_user.id)
     if u["balance"] < bet: await m.answer("❌ Мало"); await state.clear(); return
     await db.add_balance(m.from_user.id, -bet); await state.update_data(bet=bet)
-    await m.answer(f"🎲 Ставка: {fmt_full(bet)}$\nВыбери:", reply_markup=dice_choice_kb())
+    await m.answer(f"🎲 {fmt_full(bet)}$\nВыбери:", reply_markup=dice_choice_kb())
 
 @dp.callback_query(St.dice_bet, F.data.startswith("dice_"))
 async def cb_dice_result(c: CallbackQuery, state: FSMContext):
@@ -984,29 +923,19 @@ async def cb_admin_panel(c: CallbackQuery):
     u = await db.get_user(c.from_user.id)
     if not (is_main_admin(c.from_user.id) or u.get("is_admin")):
         await c.answer("Только админ", show_alert=True); return
-    perms = u.get("admin_perms", "")
-    # Строим клавиатуру в зависимости от прав
     rows = []
     if is_main_admin(c.from_user.id):
         rows = admin_main_kb().inline_keyboard
     else:
-        p = perms.split(",")
-        if "money" in p:
-            rows.append([InlineKeyboardButton(text="💰 Деньги", callback_data="adm_money_menu")])
-        if "btc" in p:
-            rows.append([InlineKeyboardButton(text="₿ Биткоины", callback_data="adm_btc_menu")])
-        if "prop" in p:
-            rows.append([InlineKeyboardButton(text="🏢 Имущество", callback_data="adm_prop_menu")])
-        if "ban" in p:
-            rows.append([InlineKeyboardButton(text="🚫 Блокировка", callback_data="adm_ban_menu")])
-        if "stats" in p:
-            rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats")])
-        if "promo" in p:
-            rows.append([InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")])
-        if "view" in p:
-            rows.append([InlineKeyboardButton(text="👤 Профиль", callback_data="adm_view_profile")])
-        if "admins" in p:
-            rows.append([InlineKeyboardButton(text="👑 Выдать админку", callback_data="adm_give_admin")])
+        p = (u.get("admin_perms") or "").split(",")
+        if "money" in p: rows.append([InlineKeyboardButton(text="💰 Деньги", callback_data="adm_money_menu")])
+        if "btc" in p: rows.append([InlineKeyboardButton(text="₿ BTC", callback_data="adm_btc_menu")])
+        if "prop" in p: rows.append([InlineKeyboardButton(text="🏢 Имущество", callback_data="adm_prop_menu")])
+        if "ban" in p: rows.append([InlineKeyboardButton(text="🚫 Блокировка", callback_data="adm_ban_menu")])
+        if "stats" in p: rows.append([InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats")])
+        if "promo" in p: rows.append([InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")])
+        if "view" in p: rows.append([InlineKeyboardButton(text="👤 Профиль", callback_data="adm_view_profile")])
+        if "admins" in p: rows.append([InlineKeyboardButton(text="👑 Выдать админку", callback_data="adm_give_admin")])
         rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     await c.message.edit_text("👑 <b>Админ-панель</b>", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows), parse_mode="HTML")
 
@@ -1018,7 +947,7 @@ async def cb_adm_money_menu(c: CallbackQuery):
 @dp.callback_query(F.data == "adm_btc_menu")
 async def cb_adm_btc_menu(c: CallbackQuery):
     if not await check_admin_perm(c, "btc"): return
-    await c.message.edit_text(f"₿ <b>Биткоины</b>\nКурс: {fmt_full(BTC_CURRENT)}$", reply_markup=admin_btc_kb(), parse_mode="HTML")
+    await c.message.edit_text(f"₿ <b>BTC</b>\nКурс: {fmt_full(BTC_CURRENT)}$", reply_markup=admin_btc_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "adm_prop_menu")
 async def cb_adm_prop_menu(c: CallbackQuery):
@@ -1033,7 +962,7 @@ async def cb_adm_ban_menu(c: CallbackQuery):
 @dp.callback_query(F.data == "adm_global_menu")
 async def cb_adm_global_menu(c: CallbackQuery):
     if not is_main_admin(c.from_user.id):
-        await c.answer("Только главный админ", show_alert=True); return
+        await c.answer("Только главный", show_alert=True); return
     await c.message.edit_text("⚙️ <b>Глобальные</b>", reply_markup=admin_global_kb(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "adm_promo_menu")
@@ -1047,7 +976,7 @@ async def cb_adm_stats(c: CallbackQuery):
     total = await db.count_all(); banned = await db.count_banned()
     online = await db.get_online(300)
     lines = [f"📊 <b>Статистика</b>", "", f"👥 Всего: <b>{total}</b>",
-             f"🚫 Забанено: <b>{banned}</b>", f"🟢 Онлайн (5м): <b>{len(online)}</b>", ""]
+             f"🚫 Забанено: <b>{banned}</b>", f"🟢 Онлайн: <b>{len(online)}</b>", ""]
     if online:
         lines.append("🟢 <b>Онлайн:</b>")
         for o in online[:20]:
@@ -1057,16 +986,12 @@ async def cb_adm_stats(c: CallbackQuery):
 @dp.callback_query(F.data == "adm_view_profile")
 async def cb_adm_view_profile(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "view"): return
-    await state.set_state(St.adm_view_profile)
-    await c.message.edit_text("👤 Введи игровой ID:")
+    await state.set_state(St.adm_view_profile); await c.message.edit_text("👤 Введи игровой ID:")
 
 @dp.message(St.adm_view_profile)
 async def cb_adm_view_profile_do(m: Message, state: FSMContext):
-    if not is_main_admin(m.from_user.id):
-        u_admin = await db.get_user(m.from_user.id)
-        if not has_perm(u_admin, "view"): return
     try: gid = int(m.text.strip())
-    except ValueError: await m.answer("❌ Число"); return
+    except: await m.answer("❌ Число"); return
     u = await db.get_user_by_game_id(gid)
     if not u: await m.answer("❌ Не найден"); await state.clear(); return
     biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
@@ -1077,21 +1002,14 @@ async def cb_adm_view_profile_do(m: Message, state: FSMContext):
         if u.get("ban_until", 0) == 0: ban_status = "🚫 Навсегда"
         elif u["ban_until"] > time.time():
             ban_status = f"🚫 До {datetime.fromtimestamp(u['ban_until']).strftime('%d.%m.%Y')}"
-    lines = [
-        f"👤 <b>Профиль #{u['game_id']}</b>", "",
-        f"🎭 Ник: {u['nick'] or '—'}",
-        f"🆔 TG ID: <code>{u['user_id']}</code>",
-        f"🚫 Бан: {ban_status}",
-        f"👑 Админ: {'✅ Да (' + u.get('admin_perms','') + ')' if u.get('is_admin') else '❌ Нет'}", "",
-        f"💰 Баланс: {fmt_full(u['balance'])}$",
-        f"🏦 Счёт: {fmt_full(u['bank_wallet'])}$",
-        f"₿ BTC: {fmt_btc(u['btc'])}",
-        f"💼 Бизнес: {list(biz.keys())[0] if biz else '—'}",
-        f"⛏ Ферма: {ftype} ({fcount} шт)" if ftype != "—" else "⛏ Ферма: —",
-        f"🏠 Дом: {houses[0] if houses else '—'}",
-        f"🚗 Машина: {cars[0] if cars else '—'}",
-        f"🎮 {u['wins']}W / {u['losses']}L",
-    ]
+    lines = [f"👤 <b>Профиль #{u['game_id']}</b>", "",
+             f"🎭 {u['nick'] or '—'}", f"🆔 <code>{u['user_id']}</code>",
+             f"🚫 Бан: {ban_status}",
+             f"👑 Админ: {'✅ ' + (u.get('admin_perms') or '') if u.get('is_admin') else '❌'}", "",
+             f"💰 {fmt_full(u['balance'])}$", f"🏦 {fmt_full(u['bank_wallet'])}$",
+             f"₿ {fmt_btc(u['btc'])}", f"💼 {list(biz.keys())[0] if biz else '—'}",
+             f"⛏ {ftype} ({fcount})", f"🏠 {houses[0] if houses else '—'}",
+             f"🚗 {cars[0] if cars else '—'}", f"🎮 {u['wins']}W/{u['losses']}L"]
     await m.answer("\n".join(lines), reply_markup=back_kb("admin_panel"), parse_mode="HTML")
     await state.clear()
 
@@ -1107,14 +1025,14 @@ async def cb_adm_give_money_do(m: Message, state: FSMContext):
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID сумма"); return
     try: gid = int(parts[0])
-    except ValueError: await m.answer("❌ ID"); return
+    except: await m.answer("❌ ID"); return
     amount = parse_amount(parts[1])
     if not amount or amount <= 0: await m.answer("❌ Сумма"); return
-    if amount > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if amount > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
     await db.add_balance(u["user_id"], amount)
-    await m.answer(f"✅ +{fmt_full(amount)}$ игроку #{gid}", reply_markup=back_kb("adm_money_menu"))
+    await m.answer(f"✅ +{fmt_full(amount)}$ → #{gid}", reply_markup=back_kb("adm_money_menu"))
     await state.clear()
 
 @dp.callback_query(F.data == "adm_take_money")
@@ -1128,14 +1046,14 @@ async def cb_adm_take_money_do(m: Message, state: FSMContext):
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID сумма"); return
     try: gid = int(parts[0])
-    except ValueError: await m.answer("❌ ID"); return
+    except: await m.answer("❌ ID"); return
     amount = parse_amount(parts[1])
     if not amount or amount <= 0: await m.answer("❌ Сумма"); return
-    if amount > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if amount > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
     await db.add_balance(u["user_id"], -amount)
-    await m.answer(f"✅ -{fmt_full(amount)}$ у #{gid}", reply_markup=back_kb("adm_money_menu"))
+    await m.answer(f"✅ -{fmt_full(amount)}$ ← #{gid}", reply_markup=back_kb("adm_money_menu"))
     await state.clear()
 
 # --- BTC ---
@@ -1149,13 +1067,12 @@ async def cb_adm_give_btc(c: CallbackQuery, state: FSMContext):
 async def cb_adm_give_btc_do(m: Message, state: FSMContext):
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID кол-во"); return
-    try:
-        gid = int(parts[0]); amount = float(parts[1].replace(",", "."))
-    except ValueError: await m.answer("❌ Данные"); return
+    try: gid = int(parts[0]); amount = float(parts[1].replace(",", "."))
+    except: await m.answer("❌ Данные"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
     await db.update(u["user_id"], btc=u["btc"] + amount)
-    await m.answer(f"✅ +{amount:.4f}₿ игроку #{gid}", reply_markup=back_kb("adm_btc_menu"))
+    await m.answer(f"✅ +{amount:.4f}₿ → #{gid}", reply_markup=back_kb("adm_btc_menu"))
     await state.clear()
 
 @dp.callback_query(F.data == "adm_take_btc")
@@ -1168,28 +1085,23 @@ async def cb_adm_take_btc(c: CallbackQuery, state: FSMContext):
 async def cb_adm_take_btc_do(m: Message, state: FSMContext):
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID кол-во"); return
-    try:
-        gid = int(parts[0]); amount = float(parts[1].replace(",", "."))
-    except ValueError: await m.answer("❌ Данные"); return
+    try: gid = int(parts[0]); amount = float(parts[1].replace(",", "."))
+    except: await m.answer("❌ Данные"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
-    new_btc = max(0, u["btc"] - amount)
-    await db.update(u["user_id"], btc=new_btc)
-    await m.answer(f"✅ -{amount:.4f}₿ у #{gid}", reply_markup=back_kb("adm_btc_menu"))
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
+    await db.update(u["user_id"], btc=max(0, u["btc"] - amount))
+    await m.answer(f"✅ -{amount:.4f}₿ ← #{gid}", reply_markup=back_kb("adm_btc_menu"))
     await state.clear()
 
 @dp.callback_query(F.data == "adm_set_btc_price")
 async def cb_adm_set_btc_price(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "btc"): return
     await state.set_state(St.adm_btc_price)
-    await c.message.edit_text(f"💱 Текущий курс: {fmt_full(BTC_CURRENT)}$\n\nВведи новый:")
+    await c.message.edit_text(f"💱 Курс: {fmt_full(BTC_CURRENT)}$\n\nНовый:")
 
 @dp.message(St.adm_btc_price)
 async def cb_adm_btc_price_do(m: Message, state: FSMContext):
     global BTC_CURRENT
-    if not is_main_admin(m.from_user.id):
-        u_admin = await db.get_user(m.from_user.id)
-        if not has_perm(u_admin, "btc"): return
     amount = parse_amount(m.text)
     if not amount or amount <= 0: await m.answer("❌ Сумма"); return
     BTC_CURRENT = amount
@@ -1201,56 +1113,44 @@ async def cb_adm_btc_price_do(m: Message, state: FSMContext):
 async def cb_adm_ban(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "ban"): return
     await state.set_state(St.adm_ban)
-    await c.message.edit_text("🚫 <code>ID дней</code>\n999 = навсегда (сброс аккаунта)\nПример: <code>1001 7</code>")
+    await c.message.edit_text("🚫 <code>ID дней</code>\n999 = навсегда + сброс\nПример: <code>1001 7</code>")
 
 @dp.message(St.adm_ban)
 async def cb_adm_ban_do(m: Message, state: FSMContext):
-    if not is_main_admin(m.from_user.id):
-        u_admin = await db.get_user(m.from_user.id)
-        if not has_perm(u_admin, "ban"): return
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID дней"); return
-    try:
-        gid = int(parts[0]); days = int(parts[1])
-    except ValueError: await m.answer("❌ Числа"); return
-    if days <= 0: await m.answer("❌ Дней > 0"); return
+    try: gid = int(parts[0]); days = int(parts[1])
+    except: await m.answer("❌ Числа"); return
+    if days <= 0: await m.answer("❌ > 0"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
-    if u["user_id"] == ADMIN_ID:
-        await m.answer("❌ Нельзя забанить главного админа"); await state.clear(); return
-    # Проверка: если банит админ-админ, нельзя банить других админов (кроме главного)
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
+    if u["user_id"] == ADMIN_ID: await m.answer("❌ Нельзя главного"); await state.clear(); return
     if not is_main_admin(m.from_user.id) and u.get("is_admin"):
         await m.answer("❌ Нельзя банить админов"); await state.clear(); return
     if days >= 999:
-        # Пермабан + сброс
         await db.update(u["user_id"], is_banned=1, ban_until=0)
         await db.reset_full(u["user_id"])
-        await m.answer(f"✅ Игрок #{gid} забанен НАВСЕГДА + аккаунт обнулён",
-                       reply_markup=back_kb("adm_ban_menu"))
+        await m.answer(f"✅ #{gid} забанен НАВСЕГДА + обнулён", reply_markup=back_kb("adm_ban_menu"))
     else:
         until = int(time.time()) + days * 86400
         await db.update(u["user_id"], is_banned=1, ban_until=until)
-        await m.answer(f"✅ Игрок #{gid} забанен до {datetime.fromtimestamp(until).strftime('%d.%m.%Y')}",
+        await m.answer(f"✅ #{gid} до {datetime.fromtimestamp(until).strftime('%d.%m.%Y')}",
                        reply_markup=back_kb("adm_ban_menu"))
     await state.clear()
 
 @dp.callback_query(F.data == "adm_unban")
 async def cb_adm_unban(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "ban"): return
-    await state.set_state(St.adm_unban)
-    await c.message.edit_text("✅ Введи игровой ID для разбана:")
+    await state.set_state(St.adm_unban); await c.message.edit_text("✅ Введи ID для разбана:")
 
 @dp.message(St.adm_unban)
 async def cb_adm_unban_do(m: Message, state: FSMContext):
-    if not is_main_admin(m.from_user.id):
-        u_admin = await db.get_user(m.from_user.id)
-        if not has_perm(u_admin, "ban"): return
     try: gid = int(m.text.strip())
-    except ValueError: await m.answer("❌ Число"); return
+    except: await m.answer("❌ Число"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
     await db.update(u["user_id"], is_banned=0, ban_until=0)
-    await m.answer(f"✅ Игрок #{gid} разбанен", reply_markup=back_kb("adm_ban_menu"))
+    await m.answer(f"✅ #{gid} разбанен", reply_markup=back_kb("adm_ban_menu"))
     await state.clear()
 
 # --- Имущество ---
@@ -1275,9 +1175,9 @@ async def cb_adm_prop_farm(c: CallbackQuery, state: FSMContext):
 @dp.message(St.adm_prop_target)
 async def cb_adm_prop_target_do(m: Message, state: FSMContext):
     try: gid = int(m.text.strip())
-    except ValueError: await m.answer("❌ Число"); return
+    except: await m.answer("❌ Число"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
     data = await state.get_data(); prop = data["prop"]
     await state.update_data(target_user_id=u["user_id"], target_gid=gid)
     if prop == "house":
@@ -1292,14 +1192,14 @@ async def cb_adm_set_house(c: CallbackQuery, state: FSMContext):
     key = c.data.split("_")[3]; data = await state.get_data(); uid = data.get("target_user_id")
     if not uid: return
     await db.update(uid, houses=key, garage_bought=0, garage="")
-    await c.answer(f"✅ Дом {HOUSES[key]['name']} выдан!", show_alert=True); await state.clear()
+    await c.answer(f"✅ {HOUSES[key]['name']}!", show_alert=True); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_set_biz_"))
 async def cb_adm_set_biz(c: CallbackQuery, state: FSMContext):
     key = c.data.split("_")[3]; data = await state.get_data(); uid = data.get("target_user_id")
     if not uid: return
     await db.update(uid, businesses=serialize_businesses({key: 1}), business_last_collect=int(time.time()))
-    await c.answer(f"✅ {BUSINESSES[key]['name']} выдан!", show_alert=True); await state.clear()
+    await c.answer(f"✅ {BUSINESSES[key]['name']}!", show_alert=True); await state.clear()
 
 @dp.callback_query(F.data.startswith("adm_set_farm_"))
 async def cb_adm_set_farm(c: CallbackQuery, state: FSMContext):
@@ -1309,15 +1209,13 @@ async def cb_adm_set_farm(c: CallbackQuery, state: FSMContext):
     if lst and lst[0] != key: lst = [key]
     else: lst.append(key)
     await db.update(uid, farms=serialize_list(lst))
-    await c.answer(f"✅ {FARMS[key]['name']} выдана!", show_alert=True); await state.clear()
+    await c.answer(f"✅ {FARMS[key]['name']}!", show_alert=True); await state.clear()
 
 # --- Глобальные ---
 @dp.callback_query(F.data == "adm_give_all")
 async def cb_adm_give_all(c: CallbackQuery):
-    if not is_main_admin(c.from_user.id):
-        await c.answer("Только главный админ", show_alert=True); return
-    await c.message.edit_text("⚠️ <b>Выдать ВСЕМ</b>\n\nУверен?",
-        reply_markup=admin_confirm_kb("give_all_ask"), parse_mode="HTML")
+    if not is_main_admin(c.from_user.id): await c.answer("Только главный", show_alert=True); return
+    await c.message.edit_text("⚠️ <b>Выдать ВСЕМ</b>\n\nУверен?", reply_markup=admin_confirm_kb("give_all_ask"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "adm_confirm_give_all_ask")
 async def cb_adm_give_all_ask(c: CallbackQuery, state: FSMContext):
@@ -1330,7 +1228,7 @@ async def cb_adm_give_all_do(m: Message, state: FSMContext):
     if not is_main_admin(m.from_user.id): return
     amount = parse_amount(m.text)
     if not amount or amount <= 0: await m.answer("❌ Сумма"); return
-    if amount > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if amount > MAX_AMOUNT: await m.answer(f"❌ Макс"); return
     users = await db.get_all_users()
     for u in users: await db.add_balance(u["user_id"], amount)
     await state.clear()
@@ -1338,23 +1236,21 @@ async def cb_adm_give_all_do(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_take_all")
 async def cb_adm_take_all(c: CallbackQuery):
-    if not is_main_admin(c.from_user.id):
-        await c.answer("Только главный админ", show_alert=True); return
-    await c.message.edit_text("⚠️ <b>Забрать у ВСЕХ</b>\n\nУверен?",
-        reply_markup=admin_confirm_kb("take_all_ask"), parse_mode="HTML")
+    if not is_main_admin(c.from_user.id): await c.answer("Только главный", show_alert=True); return
+    await c.message.edit_text("⚠️ <b>Забрать у ВСЕХ</b>\n\nУверен?", reply_markup=admin_confirm_kb("take_all_ask"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "adm_confirm_take_all_ask")
 async def cb_adm_take_all_ask(c: CallbackQuery, state: FSMContext):
     if not is_main_admin(c.from_user.id): return
     await state.set_state(St.adm_take_all)
-    await c.message.edit_text(f"💸 Сумма для снятия у ВСЕХ (макс {fmt_full(MAX_AMOUNT)}$):")
+    await c.message.edit_text(f"💸 Сумма для ВСЕХ (макс {fmt_full(MAX_AMOUNT)}$):")
 
 @dp.message(St.adm_take_all)
 async def cb_adm_take_all_do(m: Message, state: FSMContext):
     if not is_main_admin(m.from_user.id): return
     amount = parse_amount(m.text)
     if not amount or amount <= 0: await m.answer("❌ Сумма"); return
-    if amount > MAX_AMOUNT: await m.answer(f"❌ Максимум {fmt_full(MAX_AMOUNT)}$"); return
+    if amount > MAX_AMOUNT: await m.answer(f"❌ Макс"); return
     users = await db.get_all_users()
     for u in users: await db.add_balance(u["user_id"], -amount)
     await state.clear()
@@ -1362,11 +1258,8 @@ async def cb_adm_take_all_do(m: Message, state: FSMContext):
 
 @dp.callback_query(F.data == "adm_reset_all")
 async def cb_adm_reset_all(c: CallbackQuery):
-    if not is_main_admin(c.from_user.id):
-        await c.answer("Только главный админ", show_alert=True); return
-    await c.message.edit_text(
-        "⚠️ <b>ОБНУЛИТЬ ВСЕХ</b>\n\nБаланс, банк, BTC, бизнесы, фермы, дома, машины, скины → сброс\n\nУверен?",
-        reply_markup=admin_confirm_kb("reset_all_ask"), parse_mode="HTML")
+    if not is_main_admin(c.from_user.id): await c.answer("Только главный", show_alert=True); return
+    await c.message.edit_text("⚠️ <b>ОБНУЛИТЬ ВСЕХ</b>\n\nУверен?", reply_markup=admin_confirm_kb("reset_all_ask"), parse_mode="HTML")
 
 @dp.callback_query(F.data == "adm_confirm_reset_all_ask")
 async def cb_adm_reset_all_do(c: CallbackQuery):
@@ -1387,17 +1280,17 @@ async def cb_adm_promo_create_do(m: Message, state: FSMContext):
     if len(parts) != 3: await m.answer("❌ КОД СУММА ЛИМИТ"); return
     code = parts[0].upper(); amount = parse_amount(parts[1])
     try: limit = int(parts[2])
-    except ValueError: await m.answer("❌ Лимит"); return
+    except: await m.answer("❌ Лимит"); return
     if not amount or limit <= 0: await m.answer("❌ Данные"); return
     await db.create_promo(code, amount, limit)
-    await m.answer(f"✅ Промокод <code>{code}</code> создан", reply_markup=back_kb("adm_promo_menu"), parse_mode="HTML")
+    await m.answer(f"✅ <code>{code}</code> создан", reply_markup=back_kb("adm_promo_menu"), parse_mode="HTML")
     await state.clear()
 
 @dp.callback_query(F.data == "adm_promo_delete")
 async def cb_adm_promo_delete(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "promo"): return
     await state.set_state(St.adm_promo_delete)
-    await c.message.edit_text("🗑 Введи код для деактивации:")
+    await c.message.edit_text("🗑 Код для деактивации:")
 
 @dp.message(St.adm_promo_delete)
 async def cb_adm_promo_delete_do(m: Message, state: FSMContext):
@@ -1412,30 +1305,25 @@ async def cb_adm_promo_delete_do(m: Message, state: FSMContext):
 async def cb_adm_give_admin(c: CallbackQuery, state: FSMContext):
     if not await check_admin_perm(c, "admins"): return
     await state.set_state(St.adm_give_admin)
-    await c.message.edit_text("👑 Введи игровой ID игрока, которому выдать админку:")
+    await c.message.edit_text("👑 Введи игровой ID:")
 
 @dp.message(St.adm_give_admin)
 async def cb_adm_give_admin_do(m: Message, state: FSMContext):
     try: gid = int(m.text.strip())
-    except ValueError: await m.answer("❌ Число"); return
+    except: await m.answer("❌ Число"); return
     u = await db.get_user_by_game_id(gid)
-    if not u: await m.answer("❌ Нет игрока"); await state.clear(); return
-    if u["user_id"] == ADMIN_ID:
-        await m.answer("❌ Это главный админ"); await state.clear(); return
+    if not u: await m.answer("❌ Нет"); await state.clear(); return
+    if u["user_id"] == ADMIN_ID: await m.answer("❌ Это главный"); await state.clear(); return
     await state.update_data(adm_target_uid=u["user_id"], adm_target_gid=gid, adm_perms=[])
-    perms = []
-    await m.answer(
-        f"👑 <b>Админка для #{gid} ({u['nick']})</b>\n\n"
-        f"Нажимай на функции чтобы включить/выключить:",
-        reply_markup=admin_perms_kb(gid, perms), parse_mode="HTML")
+    await m.answer(f"👑 <b>Админка для #{gid} ({u['nick']})</b>\n\nВыбери функции:",
+        reply_markup=admin_perms_kb(gid, []), parse_mode="HTML")
     await state.set_state(None)
 
 @dp.callback_query(F.data.startswith("admperm_toggle_"))
 async def cb_admperm_toggle(c: CallbackQuery, state: FSMContext):
     if not is_main_admin(c.from_user.id):
         u_admin = await db.get_user(c.from_user.id)
-        if not has_perm(u_admin, "admins"):
-            await c.answer("Нет прав", show_alert=True); return
+        if not has_perm(u_admin, "admins"): await c.answer("Нет прав", show_alert=True); return
     key = c.data.split("_")[2]
     data = await state.get_data()
     perms = data.get("adm_perms", [])
@@ -1452,11 +1340,10 @@ async def cb_admperm_save(c: CallbackQuery, state: FSMContext):
     uid = data.get("adm_target_uid"); gid = data.get("adm_target_gid")
     perms = data.get("adm_perms", [])
     if not uid: return
-    if not perms:
-        await c.answer("Выбери хотя бы 1 функцию", show_alert=True); return
+    if not perms: await c.answer("Выбери 1 функцию", show_alert=True); return
     await db.update(uid, is_admin=1, admin_perms=",".join(perms))
     await c.message.edit_text(
-        f"✅ Админка выдана игроку #{gid}\n\nФункции: {', '.join(ADMIN_PERMS[p] for p in perms if p in ADMIN_PERMS)}",
+        f"✅ Админка #{gid}\n\nФункции: {', '.join(ADMIN_PERMS[p] for p in perms if p in ADMIN_PERMS)}",
         reply_markup=back_kb("admin_panel"))
     await state.clear()
 
