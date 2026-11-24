@@ -1,20 +1,17 @@
-# ============ SUPABASE ============
 DATABASE_URL = "postgresql://postgres.miizjvnllvcgdkeaverx:Bombastik228@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
-# ============ BOT ============
 BOT_TOKEN = "9031676987:AAEAMl_VXjvh6GGNFTUgIHKmNa8DuSxX3fM"
 ADMIN_ID = 222619025
 
 START_BALANCE = 1000
 BTC_PRICE = 110_000
-MIN_BET = 100
-MAX_BET = 999_999_999_999
+MIN_BET = 1000
+MAX_BET = 999_999_999_999_999_999
 FARM_CAP_HOURS = 48
 CASH_CAP_HOURS = 24
 CASH_COLLECT_COOLDOWN = 60
 WITHDRAW_FEE = 0.03
 SELL_PERCENT = 0.05
-
 NICK_MIN = 3
 NICK_MAX = 20
 
