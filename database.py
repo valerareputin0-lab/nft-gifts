@@ -20,6 +20,7 @@ async def init_db():
                 registered_at BIGINT,
                 balance BIGINT DEFAULT 1000,
                 btc DOUBLE PRECISION DEFAULT 0,
+                btc_wallet DOUBLE PRECISION DEFAULT 0,
                 bank_wallet BIGINT DEFAULT 0,
                 last_passive BIGINT DEFAULT 0,
                 last_bonus BIGINT DEFAULT 0,
@@ -28,6 +29,8 @@ async def init_db():
                 ban_until BIGINT DEFAULT 0,
                 is_admin INTEGER DEFAULT 0,
                 admin_perms TEXT DEFAULT '',
+                is_vip INTEGER DEFAULT 0,
+                vip_level TEXT DEFAULT '',
                 businesses TEXT DEFAULT '',
                 business_last_collect BIGINT DEFAULT 0,
                 farms TEXT DEFAULT '',
@@ -43,7 +46,6 @@ async def init_db():
                 losses INTEGER DEFAULT 0
             )
         """)
-        # Миграции
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nick TEXT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS game_id BIGINT")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS registered_at BIGINT")
@@ -52,6 +54,9 @@ async def init_db():
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS ban_until BIGINT DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin INTEGER DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_perms TEXT DEFAULT ''")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip INTEGER DEFAULT 0")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_level TEXT DEFAULT ''")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS btc_wallet DOUBLE PRECISION DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS business_last_collect BIGINT DEFAULT 0")
         await c.execute("UPDATE users SET game_id = nextval('user_game_id_seq') WHERE game_id IS NULL")
         await c.execute("UPDATE users SET registered_at = $1 WHERE registered_at IS NULL", int(time.time()))
@@ -59,14 +64,35 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS promos (
                 code TEXT PRIMARY KEY, amount BIGINT,
                 limit_total INTEGER, used INTEGER DEFAULT 0,
-                active INTEGER DEFAULT 1
+                active INTEGER DEFAULT 1,
+                vip_level TEXT DEFAULT ''
             )
         """)
         await c.execute("ALTER TABLE promos ADD COLUMN IF NOT EXISTS active INTEGER DEFAULT 1")
+        await c.execute("ALTER TABLE promos ADD COLUMN IF NOT EXISTS vip_level TEXT DEFAULT ''")
         await c.execute("""
             CREATE TABLE IF NOT EXISTS promo_uses (
                 code TEXT, user_id BIGINT,
                 PRIMARY KEY (code, user_id)
+            )
+        """)
+        # Раунды групповой рулетки (в БД, чтобы переживать рестарт)
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS group_roulette (
+                chat_id BIGINT PRIMARY KEY,
+                end_time BIGINT DEFAULT 0,
+                active INTEGER DEFAULT 0
+            )
+        """)
+        await c.execute("""
+            CREATE TABLE IF NOT EXISTS group_bets (
+                id SERIAL PRIMARY KEY,
+                chat_id BIGINT,
+                user_id BIGINT,
+                nick TEXT,
+                mult INTEGER,
+                amount BIGINT,
+                round_end BIGINT
             )
         """)
 
@@ -147,8 +173,7 @@ async def count_banned() -> int:
     async with _pool.acquire() as c:
         now = int(time.time())
         row = await c.fetchrow(
-            "SELECT COUNT(*) FROM users WHERE is_banned=1 AND (ban_until=0 OR ban_until > $1)",
-            now)
+            "SELECT COUNT(*) FROM users WHERE is_banned=1 AND (ban_until=0 OR ban_until > $1)", now)
         return row[0]
 
 async def get_online(seconds: int = 300):
@@ -156,8 +181,7 @@ async def get_online(seconds: int = 300):
         cutoff = int(time.time()) - seconds
         rows = await c.fetch(
             "SELECT game_id, nick, user_id FROM users "
-            "WHERE last_active >= $1 AND is_banned=0 ORDER BY last_active DESC",
-            cutoff)
+            "WHERE last_active >= $1 AND is_banned=0 ORDER BY last_active DESC", cutoff)
         return [dict(r) for r in rows]
 
 async def get_all_users():
@@ -169,13 +193,13 @@ async def reset_user(user_id: int):
     async with _pool.acquire() as c:
         await c.execute("""
             UPDATE users SET
-                balance=1000, btc=0, bank_wallet=0,
+                balance=1000, btc=0, btc_wallet=0, bank_wallet=0,
                 businesses='', business_last_collect=0,
                 farms='', houses='', garage='', garage_bought=0,
                 wardrobe='', clothes_worn='',
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
                 wins=0, losses=0, last_bonus=0,
-                is_admin=0, admin_perms=''
+                is_admin=0, admin_perms='', is_vip=0, vip_level=''
             WHERE user_id=$1
         """, user_id)
 
@@ -183,7 +207,7 @@ async def reset_all():
     async with _pool.acquire() as c:
         await c.execute("""
             UPDATE users SET
-                balance=1000, btc=0, bank_wallet=0,
+                balance=1000, btc=0, btc_wallet=0, bank_wallet=0,
                 businesses='', business_last_collect=0,
                 farms='', houses='', garage='', garage_bought=0,
                 wardrobe='', clothes_worn='',
@@ -192,26 +216,26 @@ async def reset_all():
         """)
 
 async def reset_full(user_id: int):
-    """Полное обнуление (для пермабана 999 дней)"""
     async with _pool.acquire() as c:
         await c.execute("""
             UPDATE users SET
-                balance=1000, btc=0, bank_wallet=0,
+                balance=1000, btc=0, btc_wallet=0, bank_wallet=0,
                 businesses='', business_last_collect=0,
                 farms='', houses='', garage='', garage_bought=0,
                 wardrobe='', clothes_worn='',
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
                 wins=0, losses=0, last_bonus=0,
-                nick=NULL, is_admin=0, admin_perms=''
+                nick=NULL, is_admin=0, admin_perms='', is_vip=0, vip_level=''
             WHERE user_id=$1
         """, user_id)
 
-async def create_promo(code: str, amount: int, limit_total: int):
+async def create_promo(code: str, amount: int, limit_total: int, vip_level: str = ""):
     async with _pool.acquire() as c:
         await c.execute(
-            "INSERT INTO promos (code, amount, limit_total, used, active) VALUES ($1,$2,$3,0,1) "
-            "ON CONFLICT (code) DO UPDATE SET amount=$2, limit_total=$3, used=0, active=1",
-            code.upper(), amount, limit_total)
+            "INSERT INTO promos (code, amount, limit_total, used, active, vip_level) "
+            "VALUES ($1,$2,$3,0,1,$4) "
+            "ON CONFLICT (code) DO UPDATE SET amount=$2, limit_total=$3, used=0, active=1, vip_level=$4",
+            code.upper(), amount, limit_total, vip_level)
 
 async def get_promo(code: str):
     async with _pool.acquire() as c:
@@ -220,8 +244,7 @@ async def get_promo(code: str):
 
 async def deactivate_promo(code: str) -> bool:
     async with _pool.acquire() as c:
-        result = await c.execute(
-            "UPDATE promos SET active=0 WHERE code=$1 AND active=1", code.upper())
+        result = await c.execute("UPDATE promos SET active=0 WHERE code=$1 AND active=1", code.upper())
         return result.split()[-1] != "0"
 
 async def use_promo(code: str, user_id: int):
@@ -236,3 +259,37 @@ async def user_used_promo(code: str, user_id: int) -> bool:
         row = await c.fetchrow(
             "SELECT 1 FROM promo_uses WHERE code=$1 AND user_id=$2", code.upper(), user_id)
         return row is not None
+
+# ============ ГРУППОВАЯ РУЛЕТКА ============
+async def get_group_round(chat_id: int):
+    async with _pool.acquire() as c:
+        row = await c.fetchrow("SELECT * FROM group_roulette WHERE chat_id=$1", chat_id)
+        return dict(row) if row else None
+
+async def set_group_round(chat_id: int, end_time: int, active: int = 1):
+    async with _pool.acquire() as c:
+        await c.execute(
+            "INSERT INTO group_roulette (chat_id, end_time, active) VALUES ($1,$2,$3) "
+            "ON CONFLICT (chat_id) DO UPDATE SET end_time=$2, active=$3",
+            chat_id, end_time, active)
+
+async def clear_group_round(chat_id: int):
+    async with _pool.acquire() as c:
+        await c.execute("UPDATE group_roulette SET active=0, end_time=0 WHERE chat_id=$1", chat_id)
+
+async def add_group_bet(chat_id: int, user_id: int, nick: str, mult: int, amount: int, round_end: int):
+    async with _pool.acquire() as c:
+        await c.execute(
+            "INSERT INTO group_bets (chat_id, user_id, nick, mult, amount, round_end) "
+            "VALUES ($1,$2,$3,$4,$5,$6)",
+            chat_id, user_id, nick, mult, amount, round_end)
+
+async def get_group_bets(chat_id: int, round_end: int):
+    async with _pool.acquire() as c:
+        rows = await c.fetch(
+            "SELECT * FROM group_bets WHERE chat_id=$1 AND round_end=$2", chat_id, round_end)
+        return [dict(r) for r in rows]
+
+async def clear_group_bets(chat_id: int, round_end: int):
+    async with _pool.acquire() as c:
+        await c.execute("DELETE FROM group_bets WHERE chat_id=$1 AND round_end=$2", chat_id, round_end)
