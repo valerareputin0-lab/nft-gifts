@@ -1,6 +1,6 @@
 DATABASE_URL = "postgresql://postgres.miizjvnllvcgdkeaverx:Bombastik228@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
 
-BOT_TOKEN = "9031676987:AAEAMl_VXjvh6GGNFTUgIHKmNa8DuSxX3fM"
+BOT_TOKEN = "9031676987:AAGYz1vtSVziLJIPzPvHVXkrXNma2raJ5fc"
 ADMIN_ID = 222619025
 
 START_BALANCE = 1000
