@@ -9,8 +9,6 @@ def main_reply_kb(is_admin: bool = False):
         [KeyboardButton(text="👤 Профиль"), KeyboardButton(text="🎰 Казино"), KeyboardButton(text="🏠 Дом")],
         [KeyboardButton(text="💼 Бизнес"), KeyboardButton(text="⛏ Фермы"), KeyboardButton(text="🛒 Магазин")],
     ]
-    if is_admin:
-        rows.append([KeyboardButton(text="👑 Админка")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def main_kb(is_admin: bool = False):
@@ -25,8 +23,6 @@ def main_kb(is_admin: bool = False):
          InlineKeyboardButton(text="🎁 Награды", callback_data="rewards")],
         [InlineKeyboardButton(text="🛒 Магазин", callback_data="shop")],
     ]
-    if is_admin:
-        rows.append([InlineKeyboardButton(text="👑 Админ", callback_data="admin_panel")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def back_kb(target="menu"):
@@ -221,11 +217,12 @@ def admin_main_kb():
          InlineKeyboardButton(text="🚫 Блокировка", callback_data="adm_ban_menu")],
         [InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats"),
          InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")],
+        [InlineKeyboardButton(text="🍀 Удача", callback_data="adm_luck_menu")],
         [InlineKeyboardButton(text="👤 Профиль игрока", callback_data="adm_view_profile")],
         [InlineKeyboardButton(text="👑 Выдать админку", callback_data="adm_give_admin")],
         [InlineKeyboardButton(text="⭐ Выдать VIP", callback_data="adm_give_vip")],
         [InlineKeyboardButton(text="⚙️ Глобальные", callback_data="adm_global_menu")],
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")]])
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="profile")]])
 
 def admin_money_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -266,6 +263,12 @@ def admin_promo_menu_kb():
         [InlineKeyboardButton(text="🗑 Удалить промокод", callback_data="adm_promo_delete")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
 
+def admin_luck_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎯 Установить удачу", callback_data="adm_luck_set")],
+        [InlineKeyboardButton(text="📊 Посмотреть удачу", callback_data="adm_luck_view")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin_panel")]])
+
 def admin_confirm_kb(action):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Да", callback_data=f"adm_confirm_{action}"),
@@ -301,6 +304,7 @@ ADMIN_PERMS = {
     "promo":  "🎟 Промокоды",
     "view":   "👤 Профиль",
     "admins": "👑 Выдать админку",
+    "luck":   "🍀 Удача",
 }
 
 def admin_perms_kb(target_game_id: int, perms: list):
@@ -322,6 +326,7 @@ def admin_vip_kb():
 
 # ============ ГРУППОВАЯ РУЛЕТКА ============
 def group_roulette_kb():
+    """Кнопки Банк/Правила для групповых чатов."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Банк", callback_data="gr_bank"),
          InlineKeyboardButton(text="📖 Правила", callback_data="gr_rules")]])
