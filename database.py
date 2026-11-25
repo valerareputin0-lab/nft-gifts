@@ -31,6 +31,7 @@ async def init_db():
                 admin_perms TEXT DEFAULT '',
                 is_vip INTEGER DEFAULT 0,
                 vip_level TEXT DEFAULT '',
+                luck INTEGER DEFAULT 50,
                 businesses TEXT DEFAULT '',
                 business_last_collect BIGINT DEFAULT 0,
                 farms TEXT DEFAULT '',
@@ -56,6 +57,7 @@ async def init_db():
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS admin_perms TEXT DEFAULT ''")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_vip INTEGER DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS vip_level TEXT DEFAULT ''")
+        await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS luck INTEGER DEFAULT 50")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS btc_wallet DOUBLE PRECISION DEFAULT 0")
         await c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS business_last_collect BIGINT DEFAULT 0")
         await c.execute("UPDATE users SET game_id = nextval('user_game_id_seq') WHERE game_id IS NULL")
@@ -76,7 +78,6 @@ async def init_db():
                 PRIMARY KEY (code, user_id)
             )
         """)
-        # Раунды групповой рулетки (в БД, чтобы переживать рестарт)
         await c.execute("""
             CREATE TABLE IF NOT EXISTS group_roulette (
                 chat_id BIGINT PRIMARY KEY,
@@ -199,7 +200,7 @@ async def reset_user(user_id: int):
                 wardrobe='', clothes_worn='',
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
                 wins=0, losses=0, last_bonus=0,
-                is_admin=0, admin_perms='', is_vip=0, vip_level=''
+                is_admin=0, admin_perms='', is_vip=0, vip_level='', luck=50
             WHERE user_id=$1
         """, user_id)
 
@@ -225,9 +226,13 @@ async def reset_full(user_id: int):
                 wardrobe='', clothes_worn='',
                 deposit_amount=0, deposit_end=0, deposit_rate=0,
                 wins=0, losses=0, last_bonus=0,
-                nick=NULL, is_admin=0, admin_perms='', is_vip=0, vip_level=''
+                nick=NULL, is_admin=0, admin_perms='', is_vip=0, vip_level='', luck=50
             WHERE user_id=$1
         """, user_id)
+
+async def set_luck(user_id: int, luck: int):
+    async with _pool.acquire() as c:
+        await c.execute("UPDATE users SET luck=$1 WHERE user_id=$2", max(0, min(100, luck)), user_id)
 
 async def create_promo(code: str, amount: int, limit_total: int, vip_level: str = ""):
     async with _pool.acquire() as c:
