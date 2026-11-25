@@ -10,7 +10,6 @@ import database as db
 from keyboards import group_roulette_kb
 from config import MIN_BET
 
-# Множители и шансы: (множитель, шанс в %)
 ROULETTE_MULTS = [
     (2, 55),
     (3, 28),
@@ -18,9 +17,7 @@ ROULETTE_MULTS = [
     (50, 1),
 ]
 
-ROUND_DURATION = 60  # секунд
-
-# Активные таймеры раундов: chat_id -> asyncio.Task
+ROUND_DURATION = 60
 _active_timers = {}
 
 
@@ -28,22 +25,31 @@ def is_group(chat_type: str) -> bool:
     return chat_type in ("group", "supergroup")
 
 
+def parse_bet(s: str):
+    """Парсит сумму с сокращениями к/кк/ккк/кккк/ккккк."""
+    if not s: return None
+    s = s.lower().strip().replace("$", "").replace(",", "").replace(" ", "")
+    mult = 1
+    if s.endswith("ккккк"): mult, s = 10**15, s[:-5]
+    elif s.endswith("кккк"): mult, s = 10**12, s[:-4]
+    elif s.endswith("ккк"): mult, s = 10**9, s[:-3]
+    elif s.endswith("кк"): mult, s = 10**6, s[:-2]
+    elif s.endswith("к"): mult, s = 10**3, s[:-1]
+    try: return int(float(s) * mult)
+    except (ValueError, TypeError): return None
+
+
 async def start_round(bot: Bot, chat_id: int):
-    """Запускает 60-секундный таймер для раунда."""
-    # Отменяем старый таймер, если был
     old = _active_timers.get(chat_id)
     if old and not old.done():
         old.cancel()
-
     end_time = int(time.time()) + ROUND_DURATION
     await db.set_group_round(chat_id, end_time, 1)
-
     task = asyncio.create_task(_round_finish(bot, chat_id, end_time))
     _active_timers[chat_id] = task
 
 
 async def _round_finish(bot: Bot, chat_id: int, end_time: int):
-    """Ждёт окончания раунда и подводит итоги."""
     try:
         wait = end_time - int(time.time())
         if wait > 0:
@@ -55,17 +61,14 @@ async def _round_finish(bot: Bot, chat_id: int, end_time: int):
             _active_timers.pop(chat_id, None)
             return
 
-        # Определяем победный множитель по шансам (честно, random.choices)
         mults = [m for m, _ in ROULETTE_MULTS]
         weights = [w for _, w in ROULETTE_MULTS]
         winning = random.choices(mults, weights=weights, k=1)[0]
 
         winners = []
         losers = []
-        # Подсчёт выплат
         for b in bets:
             if b["mult"] == winning:
-                # Выигрыш = ставка * множитель (включая тело ставки)
                 payout = b["amount"] * b["mult"]
                 user = await db.get_user_by_id(b["user_id"])
                 if user:
@@ -74,36 +77,32 @@ async def _round_finish(bot: Bot, chat_id: int, end_time: int):
             else:
                 losers.append(b)
 
-        # Формируем отчёт
         lines = [
             "🎲 <b>РАУНД ЗАВЕРШЁН!</b>",
             "",
             f"🎯 Выигрышный множитель: <b>x{winning}</b>",
             "",
         ]
-
         if winners:
             lines.append("🏆 <b>Победители:</b>")
             for b, payout in winners:
                 lines.append(f"  {b['nick']} — x{b['mult']} → +{payout:,}".replace(",", ".") + "$")
         else:
             lines.append("😢 Победителей нет.")
-
         if losers:
             total_lost = sum(b["amount"] for b in losers)
             lines.append("")
             lines.append(f"💸 Проиграли: {len(losers)} чел., всего -{total_lost:,}".replace(",", ".") + "$")
-
         lines.append("")
-        lines.append("🎰 Новая рулетка — ставь /kaz [множитель] [сумма]")
+        lines.append("🎰 Новая рулетка — /kaz [множитель] [сумма]")
 
-        # Очистка
         await db.clear_group_bets(chat_id, end_time)
         await db.clear_group_round(chat_id)
         _active_timers.pop(chat_id, None)
 
         try:
-            await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+            await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML",
+                                   reply_markup=group_roulette_kb())
         except Exception:
             pass
     except asyncio.CancelledError:
@@ -113,11 +112,9 @@ async def _round_finish(bot: Bot, chat_id: int, end_time: int):
 
 
 async def handle_kaz(bot: Bot, m: Message):
-    """Обработчик команды /kaz mult amount."""
     chat_id = m.chat.id
     user_id = m.from_user.id
 
-    # Проверка бана
     user = await db.get_user(user_id, m.from_user.username)
     if user.get("is_banned"):
         await m.reply("🚫 Ты забанен.")
@@ -128,50 +125,47 @@ async def handle_kaz(bot: Bot, m: Message):
         await m.reply(
             "❌ Формат: <code>/kaz множитель сумма</code>\n"
             "Пример: <code>/kaz 5 100000</code>\n"
-            "Доступные множители: x2, x3, x5, x50",
-            parse_mode="HTML")
+            "Сокращения: к (тыс), кк (млн), ккк (млрд), кккк (трлн), ккккк\n"
+            "Множители: x2, x3, x5, x50",
+            parse_mode="HTML",
+            reply_markup=group_roulette_kb())
         return
 
     try:
         mult = int(parts[1].replace("x", "").replace("х", ""))
-        amount = int(parts[2].replace(".", "").replace(",", "").replace(" ", ""))
     except ValueError:
-        await m.reply("❌ Неверный формат ставки.")
+        await m.reply("❌ Множитель — число")
+        return
+
+    amount = parse_bet(parts[2])
+    if amount is None:
+        await m.reply("❌ Неверная сумма")
         return
 
     if mult not in [m for m, _ in ROULETTE_MULTS]:
-        await m.reply(f"❌ Множитель должен быть одним из: {', '.join('x'+str(m) for m, _ in ROULETTE_MULTS)}")
+        await m.reply(f"❌ Множитель: {', '.join('x'+str(m) for m, _ in ROULETTE_MULTS)}")
         return
 
     if amount < MIN_BET:
-        await m.reply(f"❌ Минимальная ставка: {MIN_BET}$")
+        await m.reply(f"❌ Минимум: {MIN_BET}$")
         return
 
     if user["balance"] < amount:
-        await m.reply(f"❌ Недостаточно средств. Баланс: {user['balance']:,}$".replace(",", "."))
+        await m.reply(f"❌ Недостаточно. Баланс: {user['balance']:,}$".replace(",", "."))
         return
 
-    # Проверяем активный раунд
     rnd = await db.get_group_round(chat_id)
     if not rnd or not rnd["active"] or rnd["end_time"] <= int(time.time()):
-        # Стартуем новый раунд
         await start_round(bot, chat_id)
         rnd = await db.get_group_round(chat_id)
 
     round_end = rnd["end_time"]
-
-    # Списываем ставку
     await db.add_balance(user_id, -amount)
 
-    # Сохраняем ставку
     nick = user.get("nick") or m.from_user.first_name or "Игрок"
     await db.add_group_bet(chat_id, user_id, nick, mult, amount, round_end)
 
-    # Считаем время
-    left = round_end - int(time.time())
-    if left < 0: left = 0
-
-    # Все ставки игрока в этом раунде
+    left = max(0, round_end - int(time.time()))
     all_bets = await db.get_group_bets(chat_id, round_end)
     user_bets = [b for b in all_bets if b["user_id"] == user_id]
     total_user = sum(b["amount"] for b in user_bets)
@@ -180,54 +174,40 @@ async def handle_kaz(bot: Bot, m: Message):
         f"✅ Ставка принята!\n\n"
         f"🎯 Множитель: x{mult}\n"
         f"💰 Ставка: {amount:,}$\n".replace(",", ".") +
-        f"💵 Всего твоих ставок: {total_user:,}$\n".replace(",", ".") +
-        f"\n⏳ До конца раунда: {left} сек\n"
-        f"📊 Твой баланс: {user['balance'] - amount:,}$".replace(",", ".")
+        f"💵 Всего твоих: {total_user:,}$\n".replace(",", ".") +
+        f"\n⏳ До конца: {left} сек\n"
+        f"📊 Баланс: {user['balance'] - amount:,}$".replace(",", ".")
     )
-
     await m.reply(text, parse_mode="HTML", reply_markup=group_roulette_kb())
 
 
 async def handle_bank(c: CallbackQuery):
-    """Показывает банк текущего раунда."""
     chat_id = c.message.chat.id
     rnd = await db.get_group_round(chat_id)
     if not rnd or not rnd["active"]:
-        await c.answer("Сейчас нет активного раунда.", show_alert=True)
+        await c.answer("Нет активного раунда.", show_alert=True)
         return
-
     left = max(0, rnd["end_time"] - int(time.time()))
     bets = await db.get_group_bets(chat_id, rnd["end_time"])
-
     if not bets:
         await c.answer("Пока никто не поставил.", show_alert=True)
         return
-
-    lines = [
-        "📊 <b>Банк раунда</b>",
-        f"⏳ До конца: <b>{left} сек</b>",
-        "",
-    ]
-
-    # Группируем по множителям
+    lines = ["📊 <b>Банк раунда</b>", f"⏳ Осталось: <b>{left} сек</b>", ""]
     by_mult = {}
     for b in bets:
         by_mult.setdefault(b["mult"], []).append(b)
-
     total_pool = sum(b["amount"] for b in bets)
-    lines.append(f"💰 Общий банк: <b>{total_pool:,}$</b>".replace(",", "."))
+    lines.append(f"💰 Всего: <b>{total_pool:,}$</b>".replace(",", "."))
     lines.append("")
-
     for mult in sorted(by_mult.keys()):
         blist = by_mult[mult]
         total_m = sum(b["amount"] for b in blist)
         lines.append(f"<b>x{mult}</b> — {len(blist)} ставок, {total_m:,}$".replace(",", "."))
-        for b in blist[:5]:  # первые 5
+        for b in blist[:5]:
             lines.append(f"  • {b['nick']}: {b['amount']:,}$".replace(",", "."))
         if len(blist) > 5:
             lines.append(f"  ... и ещё {len(blist) - 5}")
         lines.append("")
-
     try:
         await c.message.edit_text("\n".join(lines), parse_mode="HTML",
                                    reply_markup=group_roulette_kb())
@@ -238,30 +218,26 @@ async def handle_bank(c: CallbackQuery):
 
 
 async def handle_rules(c: CallbackQuery):
-    """Показывает правила."""
     lines = [
         "📖 <b>Правила рулетки</b>",
         "",
-        "🎯 Делай ставки командой:",
-        "<code>/kaz множитель сумма</code>",
+        "🎯 Ставка: <code>/kaz множитель сумма</code>",
         "Пример: <code>/kaz 5 100000</code>",
+        "Сокращения: <code>к</code> (тыс), <code>кк</code> (млн), <code>ккк</code> (млрд), <code>кккк</code>, <code>ккккк</code>",
         "",
-        "⏳ Раунд длится <b>60 секунд</b> с первой ставки.",
-        "В одном чате только один раунд одновременно.",
+        "⏳ Раунд — <b>60 секунд</b> с первой ставки.",
+        "Один раунд на чат.",
         "",
         "🎲 <b>Множители и шансы:</b>",
     ]
     for mult, chance in ROULETTE_MULTS:
         lines.append(f"  • x{mult} — {chance}%")
     lines.append("")
-    lines.append("💰 Минимальная ставка: 1.000$")
-    lines.append("♾ Максимальной ставки нет")
+    lines.append("💰 Минимум: 1.000$")
+    lines.append("♾ Максимум: по балансу")
     lines.append("")
     lines.append("✅ Выигрыш = ставка × множитель (включая тело)")
-    lines.append("❌ Проигравшие теряют ставку")
-    lines.append("")
     lines.append("Можно делать несколько ставок на разные множители!")
-
     try:
         await c.message.edit_text("\n".join(lines), parse_mode="HTML",
                                    reply_markup=group_roulette_kb())
@@ -272,8 +248,6 @@ async def handle_rules(c: CallbackQuery):
 
 
 def register_group_handlers(dp):
-    """Регистрирует обработчики групповой рулетки."""
-
     @dp.message(F.text.startswith("/kaz"))
     async def kaz_handler(m: Message):
         if not is_group(m.chat.type):
