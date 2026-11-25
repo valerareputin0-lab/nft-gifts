@@ -28,7 +28,7 @@ from keyboards import (main_kb, main_reply_kb, back_kb, profile_kb,
                        admin_global_kb, admin_promo_menu_kb, admin_confirm_kb,
                        admin_house_select_kb, admin_biz_select_kb,
                        admin_farm_select_kb, admin_perms_kb, admin_vip_kb,
-                       ADMIN_PERMS)
+                       admin_luck_kb, ADMIN_PERMS)
 from groups import register_group_handlers
 from config import (BUSINESSES, FARMS, HOUSES, CARS, SKINS, DEPOSITS,
                     MIN_BET, MAX_BET, WITHDRAW_FEE, BTC_PRICE, ADMIN_ID,
@@ -64,6 +64,9 @@ class St(StatesGroup):
     adm_promo_create = State(); adm_promo_delete = State()
     adm_give_admin = State()
     adm_give_vip = State()
+    adm_luck_target = State()
+    adm_luck_set = State()
+    adm_luck_view = State()
 
 def is_main_admin(uid): return uid == ADMIN_ID
 
@@ -87,6 +90,30 @@ async def check_banned(uid):
         return f"🚫 Ты забанен до {date}."
     await db.update(uid, is_banned=0, ban_until=0)
     return None
+
+# ============ УДАЧА (LUCK) ============
+def apply_luck(win: bool, luck: int) -> bool:
+    """
+    Применяет индивидуальный шанс к результату игры.
+    luck=50 -> обычный шанс (win остаётся как есть).
+    luck=0  -> всегда проигрыш.
+    luck=100 -> всегда победа.
+    Между 0-50 или 50-100 — корректировка: если игрок должен был выиграть,
+    проверяем шанс; если должен проиграть — тоже проверяем.
+    """
+    if luck >= 100: return True
+    if luck <= 0: return False
+    # luck как вероятность перевеса (0-100)
+    # win=true: вероятность оставить победу = luck/50 если luck<50, иначе 1
+    # win=false: вероятность превратить в победу = (luck-50)/50 если luck>50, иначе 0
+    if win:
+        # Шанс сохранить победу: luck/50 (при luck<50 меньше 100%, при luck>=50 = 100%)
+        p = min(1.0, luck / 50.0)
+        return random.random() < p
+    else:
+        # Шанс превратить в победу: (luck-50)/50 (при luck<=50 = 0%)
+        p = max(0.0, (luck - 50) / 50.0)
+        return random.random() < p
 
 # ============ НИК ============
 async def ask_nick(m, state, source="start"):
@@ -112,7 +139,8 @@ async def process_nick(m: Message, state: FSMContext):
         await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML", reply_markup=back_kb("profile"))
     else:
         await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML",
-                       reply_markup=main_kb(adm))
+                       reply_markup=main_reply_kb(adm))
+        await show_profile(m.from_user.id, m, is_cb=False)
 
 # ============ СТАРТ ============
 @dp.message(Command("start"))
@@ -123,21 +151,15 @@ async def cmd_start(m: Message, state: FSMContext):
     if ban: await m.answer(ban); return
     if not u.get("nick"):
         await ask_nick(m, state, "start"); return
-    adm = is_admin_any(u)
-    await m.answer(
-        f"🎰 <b>Добро пожаловать, {u['nick']}!</b>\n\n"
-        f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>\n\n"
-        f"📋 Используй кнопки ниже 👇",
-        reply_markup=main_reply_kb(adm), parse_mode="HTML")
-    await m.answer("Меню:", reply_markup=main_kb(adm))
+    await show_profile(m.from_user.id, m, is_cb=False)
 
+# ============ REPLY-КНОПКИ ============
 @dp.message(F.text == "👤 Профиль")
 async def reply_profile(m: Message):
-    await show_profile(m)
+    await show_profile(m.from_user.id, m, is_cb=False)
 
 @dp.message(F.text == "🎰 Казино")
 async def reply_casino(m: Message):
-    u = await db.get_user(m.from_user.id)
     ban = await check_banned(m.from_user.id)
     if ban: await m.answer(ban); return
     await m.answer(
@@ -149,33 +171,64 @@ async def reply_casino(m: Message):
 
 @dp.message(F.text == "🏠 Дом")
 async def reply_houses(m: Message):
-    await show_houses(m)
+    await show_houses(m.from_user.id, m, is_cb=False)
 
 @dp.message(F.text == "💼 Бизнес")
 async def reply_biz(m: Message):
-    await show_biz(m)
+    await show_biz(m.from_user.id, m, is_cb=False)
 
 @dp.message(F.text == "⛏ Фермы")
 async def reply_farms(m: Message):
-    await show_farms(m)
+    await show_farms(m.from_user.id, m, is_cb=False)
 
 @dp.message(F.text == "🛒 Магазин")
 async def reply_shop(m: Message):
-    await show_shop(m)
+    await show_shop(m.from_user.id, m, is_cb=False)
 
-@dp.message(F.text == "👑 Админка")
-async def reply_admin(m: Message):
+@dp.message(F.text == "🏦 Банк")
+async def reply_bank(m: Message):
+    ban = await check_banned(m.from_user.id)
+    if ban: await m.answer(ban); return
     u = await db.get_user(m.from_user.id)
-    if not is_admin_any(u):
-        await m.answer("❌ Нет прав"); return
-    await show_admin_panel(m.from_user.id, m)
+    has_dep = u["deposit_amount"] > 0
+    ready = has_dep and u["deposit_end"] <= time.time()
+    lines = [f"🏦 <b>БАНК</b>", "", f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>",
+             f"🏦 Счёт: <b>{fmt_full(u['bank_wallet'])}$</b>"]
+    if has_dep:
+        lines.append(""); lines.append(f"📈 Вклад: <b>{fmt_full(u['deposit_amount'])}$</b>")
+    lines.append(""); lines.append("💸 Комиссия снятия: 3%")
+    await m.answer("\n".join(lines), reply_markup=bank_kb(has_dep, ready), parse_mode="HTML")
+
+@dp.message(F.text == "🎁 Награды")
+async def reply_rewards(m: Message):
+    ban = await check_banned(m.from_user.id)
+    if ban: await m.answer(ban); return
+    await m.answer("🎁 <b>Награды</b>", reply_markup=rewards_kb(), parse_mode="HTML")
+
+@dp.message(F.text == "🏆 Топ")
+async def reply_top(m: Message):
+    ban = await check_banned(m.from_user.id)
+    if ban: await m.answer(ban); return
+    top = await db.get_top(10)
+    rank = await db.get_user_rank(m.from_user.id)
+    digits = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+    lines = [f"💲 Топ игроков:", ""]
+    for i in range(10):
+        if i < len(top):
+            u = top[i]; lines.append(f"{digits[i]} {u.get('nick') or 'Игрок'} — {fmt_full(u['balance'])}$")
+        else:
+            lines.append(f"{digits[i]} —")
+    lines.append(""); lines.append(f"🌍 Твоя позиция: #{rank}")
+    await m.answer("\n".join(lines), reply_markup=back_kb("profile"), parse_mode="HTML")
+
+@dp.message(F.text == "✏️ Сменить ник")
+async def reply_change_nick(m: Message, state: FSMContext):
+    ban = await check_banned(m.from_user.id)
+    if ban: await m.answer(ban); return
+    await ask_nick(m, state, "change")
 
 # ============ ПРОФИЛЬ ============
-async def show_profile(m_or_c, is_cb=False):
-    if is_cb:
-        uid = m_or_c.from_user.id
-    else:
-        uid = m_or_c.from_user.id
+async def show_profile(uid, m_or_c, is_cb=False):
     ban = await check_banned(uid)
     if ban:
         if is_cb: await m_or_c.answer(ban, show_alert=True)
@@ -243,10 +296,12 @@ async def show_profile(m_or_c, is_cb=False):
         await m_or_c.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
     else:
         await m_or_c.answer(text, reply_markup=kb, parse_mode="HTML")
+        # Нижние кнопки тоже обновляем (на случай смены прав)
+        await m_or_c.answer("Меню:", reply_markup=main_reply_kb(adm))
 
 @dp.callback_query(F.data == "profile")
 async def cb_profile(c: CallbackQuery):
-    await show_profile(c, is_cb=True)
+    await show_profile(c.from_user.id, c, is_cb=True)
 
 @dp.callback_query(F.data == "menu")
 async def cb_menu(c: CallbackQuery, state: FSMContext):
@@ -255,9 +310,7 @@ async def cb_menu(c: CallbackQuery, state: FSMContext):
     if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     await db.touch_active(c.from_user.id)
-    adm = is_admin_any(u)
-    await c.message.edit_text("🏠 <b>Главное меню</b>",
-        reply_markup=main_kb(adm), parse_mode="HTML")
+    await show_profile(c.from_user.id, c, is_cb=True)
 
 @dp.callback_query(F.data == "change_nick")
 async def cb_change_nick(c: CallbackQuery, state: FSMContext):
@@ -283,8 +336,7 @@ async def cb_top(c: CallbackQuery):
     await c.message.edit_text("\n".join(lines), reply_markup=back_kb("profile"), parse_mode="HTML")
 
 # ============ БИЗНЕСЫ ============
-async def show_biz(m_or_c, is_cb=False):
-    uid = m_or_c.from_user.id
+async def show_biz(uid, m_or_c, is_cb=False):
     ban = await check_banned(uid)
     if ban:
         if is_cb: await m_or_c.answer(ban, show_alert=True)
@@ -319,7 +371,7 @@ async def show_biz(m_or_c, is_cb=False):
 
 @dp.callback_query(F.data == "biz")
 async def cb_biz(c: CallbackQuery):
-    await show_biz(c, is_cb=True)
+    await show_biz(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("biz_info_"))
 async def cb_biz_info(c: CallbackQuery):
@@ -345,7 +397,7 @@ async def cb_buy_biz(c: CallbackQuery):
     if u["balance"] < b["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -b["price"])
     await db.update(c.from_user.id, businesses=serialize_businesses({bid: 1}), business_last_collect=int(time.time()))
-    await c.answer(f"✅ {b['name']}!", show_alert=True); await show_biz(c, True)
+    await c.answer(f"✅ {b['name']}!", show_alert=True); await show_biz(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("upbiz_"))
 async def cb_upgrade_biz(c: CallbackQuery):
@@ -362,7 +414,7 @@ async def cb_upgrade_biz(c: CallbackQuery):
     if u["balance"] < cost: await c.answer(f"❌ {fmt_short(cost)}$", show_alert=True); return
     await db.add_balance(c.from_user.id, -cost)
     await db.update(c.from_user.id, businesses=serialize_businesses({bid: lvl + 1}), business_last_collect=int(time.time()))
-    await c.answer(f"✅ Lvl {lvl+1}!", show_alert=True); await show_biz(c, True)
+    await c.answer(f"✅ Lvl {lvl+1}!", show_alert=True); await show_biz(c.from_user.id, c, True)
 
 @dp.callback_query(F.data == "biz_collect")
 async def cb_biz_collect(c: CallbackQuery):
@@ -371,7 +423,7 @@ async def cb_biz_collect(c: CallbackQuery):
     amount, cd = await collect_business(c.from_user.id)
     if cd > 0: await c.answer(f"⏳ {cd} сек", show_alert=True); return
     if amount == 0: await c.answer("Пусто", show_alert=True); return
-    await c.answer(f"💰 +{fmt_full(amount)}$", show_alert=True); await show_biz(c, True)
+    await c.answer(f"💰 +{fmt_full(amount)}$", show_alert=True); await show_biz(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("sellbiz_"))
 async def cb_sell_biz(c: CallbackQuery):
@@ -386,11 +438,10 @@ async def cb_sell_biz(c: CallbackQuery):
     sell = int(BUSINESSES[bid]["price"] * (1 - SELL_PERCENT))
     await db.add_balance(c.from_user.id, cash + sell)
     await db.update(c.from_user.id, businesses="", business_last_collect=0)
-    await c.answer(f"💸 +{fmt_full(cash + sell)}$", show_alert=True); await show_biz(c, True)
+    await c.answer(f"💸 +{fmt_full(cash + sell)}$", show_alert=True); await show_biz(c.from_user.id, c, True)
 
 # ============ ФЕРМЫ ============
-async def show_farms(m_or_c, is_cb=False):
-    uid = m_or_c.from_user.id
+async def show_farms(uid, m_or_c, is_cb=False):
     ban = await check_banned(uid)
     if ban:
         if is_cb: await m_or_c.answer(ban, show_alert=True)
@@ -427,7 +478,7 @@ async def show_farms(m_or_c, is_cb=False):
 
 @dp.callback_query(F.data == "farms")
 async def cb_farms(c: CallbackQuery):
-    await show_farms(c, True)
+    await show_farms(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("buyfarm_"))
 async def cb_buy_farm_choose(c: CallbackQuery, state: FSMContext):
@@ -512,7 +563,7 @@ async def cb_farms_withdraw(c: CallbackQuery):
     amount = u["btc"]
     await db.update(c.from_user.id, btc=0, btc_wallet=(u.get("btc_wallet",0) + amount))
     await c.answer(f"✅ Снято {fmt_btc(amount)}₿ в кошелёк", show_alert=True)
-    await show_farms(c, True)
+    await show_farms(c.from_user.id, c, True)
 
 @dp.callback_query(F.data == "farms_sellbtc")
 async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
@@ -520,7 +571,7 @@ async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
     if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
     if u.get("btc_wallet", 0) < 0.001:
-        await c.answer("В кошельке мало BTC. Сначала сними с ферм.", show_alert=True); return
+        await c.answer("В кошельке мало BTC. Сними с ферм.", show_alert=True); return
     await state.set_state(St.sell_btc)
     await c.message.edit_text(
         f"₿ В кошельке: {fmt_btc(u['btc_wallet'])}₿\n"
@@ -539,8 +590,7 @@ async def cb_sell_btc_amount(m: Message, state: FSMContext):
     await m.answer(f"✅ {amount:.4f}₿ → {fmt_full(money)}$", reply_markup=back_kb("farms"))
 
 # ============ ДОМА ============
-async def show_houses(m_or_c, is_cb=False):
-    uid = m_or_c.from_user.id
+async def show_houses(uid, m_or_c, is_cb=False):
     ban = await check_banned(uid)
     if ban:
         if is_cb: await m_or_c.answer(ban, show_alert=True)
@@ -566,7 +616,7 @@ async def show_houses(m_or_c, is_cb=False):
 
 @dp.callback_query(F.data == "houses")
 async def cb_houses(c: CallbackQuery):
-    await show_houses(c, True)
+    await show_houses(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("buyhouse_"))
 async def cb_buy_house(c: CallbackQuery):
@@ -579,7 +629,7 @@ async def cb_buy_house(c: CallbackQuery):
     if u["balance"] < h["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -h["price"])
     await db.update(c.from_user.id, houses=key, garage_bought=0, garage="")
-    await c.answer(f"✅ {h['name']}!", show_alert=True); await show_houses(c, True)
+    await c.answer(f"✅ {h['name']}!", show_alert=True); await show_houses(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("sellhouse_"))
 async def cb_sell_house(c: CallbackQuery):
@@ -592,7 +642,7 @@ async def cb_sell_house(c: CallbackQuery):
     sell = int(HOUSES[key]["price"] * SELL_PERCENT)
     await db.add_balance(c.from_user.id, sell)
     await db.update(c.from_user.id, houses="", garage_bought=0, garage="")
-    await c.answer(f"💸 +{fmt_full(sell)}$", show_alert=True); await show_houses(c, True)
+    await c.answer(f"💸 +{fmt_full(sell)}$", show_alert=True); await show_houses(c.from_user.id, c, True)
 
 # ============ ГАРАЖ ============
 @dp.callback_query(F.data == "garage")
@@ -625,7 +675,7 @@ async def cb_buy_garage(c: CallbackQuery):
     if u["balance"] < price: await c.answer(f"❌ {fmt_short(price)}$", show_alert=True); return
     await db.add_balance(c.from_user.id, -price)
     await db.update(c.from_user.id, garage_bought=1)
-    await c.answer(f"✅ Гараж за {fmt_short(price)}$", show_alert=True); await show_houses(c, True)
+    await c.answer(f"✅ Гараж за {fmt_short(price)}$", show_alert=True); await show_houses(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("buycar_"))
 async def cb_buy_car(c: CallbackQuery):
@@ -676,8 +726,7 @@ async def cb_wear(c: CallbackQuery):
     await db.update(c.from_user.id, clothes_worn=serialize_list(worn)); await cb_wardrobe(c)
 
 # ============ МАГАЗИН ============
-async def show_shop(m_or_c, is_cb=False):
-    uid = m_or_c.from_user.id
+async def show_shop(uid, m_or_c, is_cb=False):
     ban = await check_banned(uid)
     if ban:
         if is_cb: await m_or_c.answer(ban, show_alert=True)
@@ -697,7 +746,7 @@ async def show_shop(m_or_c, is_cb=False):
 
 @dp.callback_query(F.data == "shop")
 async def cb_shop(c: CallbackQuery):
-    await show_shop(c, True)
+    await show_shop(c.from_user.id, c, True)
 
 @dp.callback_query(F.data.startswith("buyskin_"))
 async def cb_buy_skin(c: CallbackQuery):
@@ -710,7 +759,7 @@ async def cb_buy_skin(c: CallbackQuery):
     if u["balance"] < skin["price"]: await c.answer("❌ Мало!", show_alert=True); return
     await db.add_balance(c.from_user.id, -skin["price"]); owned.append(key)
     await db.update(c.from_user.id, wardrobe=serialize_list(owned))
-    await c.answer(f"✅ {skin['name']}!", show_alert=True); await show_shop(c, True)
+    await c.answer(f"✅ {skin['name']}!", show_alert=True); await show_shop(c.from_user.id, c, True)
 
 # ============ НАГРАДЫ ============
 @dp.callback_query(F.data == "rewards")
@@ -750,13 +799,15 @@ async def cb_promo_submit(m: Message, state: FSMContext):
     if not p.get("active", 1): await m.answer("❌ Неактивен", reply_markup=back_kb("rewards")); await state.clear(); return
     if p["used"] >= p["limit_total"]: await m.answer("❌ Исчерпан", reply_markup=back_kb("rewards")); await state.clear(); return
     if await db.user_used_promo(code, m.from_user.id): await m.answer("❌ Уже активирован", reply_markup=back_kb("rewards")); await state.clear(); return
-    await db.add_balance(m.from_user.id, p["amount"])
+    if p["amount"] > 0:
+        await db.add_balance(m.from_user.id, p["amount"])
     if p.get("vip_level"):
         await db.update(m.from_user.id, is_vip=1, vip_level=p["vip_level"])
     await db.use_promo(code, m.from_user.id)
     await state.clear()
     extra = f"\n⭐ VIP: {p['vip_level']}" if p.get("vip_level") else ""
-    await m.answer(f"🎉 +{fmt_full(p['amount'])}$!{extra}", reply_markup=back_kb("rewards"))
+    amt = f"+{fmt_full(p['amount'])}$" if p["amount"] > 0 else ""
+    await m.answer(f"🎉 {amt}{extra}".strip(), reply_markup=back_kb("rewards"))
 
 # ============ БАНК ============
 @dp.callback_query(F.data == "bank")
@@ -923,7 +974,7 @@ async def cb_bj_bet(m: Message, state: FSMContext):
     deck = new_deck(); random.shuffle(deck)
     player = [deck.pop(), deck.pop()]; dealer = [deck.pop(), deck.pop()]
     await state.set_state(St.bj_play)
-    await state.update_data(bet=bet, player=player, dealer=dealer, deck=deck, doubled=False)
+    await state.update_data(bet=bet, player=player, dealer=dealer, deck=deck, doubled=False, luck=u.get("luck", 50))
     pv = hand_value(player)
     if is_blackjack(player):
         if is_blackjack(dealer):
@@ -974,18 +1025,39 @@ async def cb_bj_double(c: CallbackQuery, state: FSMContext):
 async def finish_bj(c, state, data):
     data["dealer"] = dealer_play(data["dealer"], data["deck"])
     pv, dv, bet = hand_value(data["player"]), hand_value(data["dealer"]), data["bet"]
+    luck = data.get("luck", 50)
     u = await db.get_user(c.from_user.id)
+    raw_win = (dv > 21 or pv > dv)
+    # Ничья
+    if pv == dv:
+        # При luck != 50 ничья может быть переиграна
+        if luck > 50:
+            # Превращаем ничью в победу с шансом (luck-50)/50
+            if random.random() < (luck - 50) / 50.0:
+                await db.add_balance(c.from_user.id, bet * 2)
+                await db.update(c.from_user.id, wins=u["wins"]+1)
+                table = f"👤 {fmt_hand(data['player'])} = {pv}\n🤖 {fmt_hand(data['dealer'])} = {dv}\n\n"
+                await state.clear()
+                await c.message.edit_text(table + f"🎉 +{fmt_full(bet)}$", reply_markup=casino_kb(), parse_mode="HTML")
+                return
+        await db.add_balance(c.from_user.id, bet)
+        text = f"👤 {fmt_hand(data['player'])} = {pv}\n🤖 {fmt_hand(data['dealer'])} = {dv}\n\n🤝 Ничья"
+        await state.clear()
+        await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
+        return
+    final_win = apply_luck(raw_win, luck)
     table = f"👤 {fmt_hand(data['player'])} = {pv}\n🤖 {fmt_hand(data['dealer'])} = {dv}\n\n"
-    if dv > 21 or pv > dv:
+    if final_win:
         await db.add_balance(c.from_user.id, bet * 2)
-        await db.update(c.from_user.id, wins=u["wins"]+1); text = table + f"🎉 +{fmt_full(bet)}$"
-    elif pv == dv:
-        await db.add_balance(c.from_user.id, bet); text = table + "🤝 Ничья"
+        await db.update(c.from_user.id, wins=u["wins"]+1)
+        text = table + f"🎉 +{fmt_full(bet)}$"
     else:
-        await db.update(c.from_user.id, losses=u["losses"]+1); text = table + f"❌ -{fmt_full(bet)}$"
+        await db.update(c.from_user.id, losses=u["losses"]+1)
+        text = table + f"❌ -{fmt_full(bet)}$"
     await state.clear()
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
+# --- РУЛЕТКА ---
 @dp.callback_query(F.data == "rl_start")
 async def cb_rl_start(c: CallbackQuery, state: FSMContext):
     ban = await check_banned(c.from_user.id)
@@ -1000,13 +1072,14 @@ async def cb_rl_bet(m: Message, state: FSMContext):
     if bet > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user(m.from_user.id)
     if u["balance"] < bet: await m.answer("❌ Мало"); await state.clear(); return
-    await db.add_balance(m.from_user.id, -bet); await state.update_data(bet=bet)
+    await db.add_balance(m.from_user.id, -bet)
+    await state.update_data(bet=bet, luck=u.get("luck", 50))
     await m.answer(f"🎯 {fmt_full(bet)}$", reply_markup=rl_choice_kb())
 
 @dp.callback_query(St.rl_bet, F.data.startswith("rl_"))
 async def cb_rl_result(c: CallbackQuery, state: FSMContext):
     if c.data in ("rl_start", "rl_info"): return
-    choice = c.data.split("_")[1]; data = await state.get_data(); bet = data["bet"]; await state.clear()
+    choice = c.data.split("_")[1]; data = await state.get_data(); bet = data["bet"]; luck = data.get("luck", 50); await state.clear()
     num = random.randint(0, 36)
     color = "green" if num == 0 else ("red" if num in [1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36] else "black")
     win, mult = False, 0
@@ -1018,9 +1091,11 @@ async def cb_rl_result(c: CallbackQuery, state: FSMContext):
     elif choice == "low" and 1 <= num <= 12: win, mult = True, 3
     elif choice == "mid" and 13 <= num <= 24: win, mult = True, 3
     elif choice == "high" and 25 <= num <= 36: win, mult = True, 3
+    final_win = apply_luck(win, luck)
     u = await db.get_user(c.from_user.id); emoji = {"red": "🔴", "black": "⚫", "green": "🟢"}[color]
-    if win:
-        payout = bet * mult; await db.add_balance(c.from_user.id, payout)
+    if final_win:
+        payout = bet * mult
+        await db.add_balance(c.from_user.id, payout)
         await db.update(c.from_user.id, wins=u["wins"]+1)
         text = f"🎯 {emoji} <b>{num}</b>\n\n✅ +{fmt_full(payout - bet)}$ (x{mult})"
     else:
@@ -1028,6 +1103,7 @@ async def cb_rl_result(c: CallbackQuery, state: FSMContext):
         text = f"🎯 {emoji} <b>{num}</b>\n\n❌ -{fmt_full(bet)}$"
     await c.message.edit_text(text, reply_markup=casino_kb(), parse_mode="HTML")
 
+# --- КОСТИ ---
 @dp.callback_query(F.data == "dice_start")
 async def cb_dice_start(c: CallbackQuery, state: FSMContext):
     ban = await check_banned(c.from_user.id)
@@ -1042,20 +1118,23 @@ async def cb_dice_bet(m: Message, state: FSMContext):
     if bet > MAX_AMOUNT: await m.answer(f"❌ Макс {fmt_full(MAX_AMOUNT)}$"); return
     u = await db.get_user(m.from_user.id)
     if u["balance"] < bet: await m.answer("❌ Мало"); await state.clear(); return
-    await db.add_balance(m.from_user.id, -bet); await state.update_data(bet=bet)
+    await db.add_balance(m.from_user.id, -bet)
+    await state.update_data(bet=bet, luck=u.get("luck", 50))
     await m.answer(f"🎲 {fmt_full(bet)}$\nВыбери:", reply_markup=dice_choice_kb())
 
 @dp.callback_query(St.dice_bet, F.data.startswith("dice_"))
 async def cb_dice_result(c: CallbackQuery, state: FSMContext):
     if c.data == "dice_start": return
-    choice = c.data.split("_")[1]; data = await state.get_data(); bet = data["bet"]; await state.clear()
+    choice = c.data.split("_")[1]; data = await state.get_data(); bet = data["bet"]; luck = data.get("luck", 50); await state.clear()
     roll = random.randint(1, 6); u = await db.get_user(c.from_user.id); win, mult = False, 0
     if choice.isdigit():
         if int(choice) == roll: win, mult = True, 5
     elif choice == "low" and roll in [1,2,3]: win, mult = True, 2
     elif choice == "high" and roll in [4,5,6]: win, mult = True, 2
-    if win:
-        payout = bet * mult; await db.add_balance(c.from_user.id, payout)
+    final_win = apply_luck(win, luck)
+    if final_win:
+        payout = bet * mult
+        await db.add_balance(c.from_user.id, payout)
         await db.update(c.from_user.id, wins=u["wins"]+1)
         text = f"🎲 <b>{roll}</b>\n\n🎉 +{fmt_full(payout - bet)}$ (x{mult})"
     else:
@@ -1086,7 +1165,8 @@ async def show_admin_panel(uid, m_or_c, is_cb=True):
         if "promo" in p: rows.append([InlineKeyboardButton(text="🎟 Промокоды", callback_data="adm_promo_menu")])
         if "view" in p: rows.append([InlineKeyboardButton(text="👤 Профиль", callback_data="adm_view_profile")])
         if "admins" in p: rows.append([InlineKeyboardButton(text="👑 Выдать админку", callback_data="adm_give_admin")])
-        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
+        if "luck" in p: rows.append([InlineKeyboardButton(text="🍀 Удача", callback_data="adm_luck_menu")])
+        rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="profile")])
     kb = InlineKeyboardMarkup(inline_keyboard=rows)
     text = "👑 <b>Админ-панель</b>"
     if is_cb:
@@ -1141,6 +1221,11 @@ async def cb_adm_give_vip(c: CallbackQuery):
     if not is_main_admin(c.from_user.id): await c.answer("Только главный", show_alert=True); return
     await c.message.edit_text("⭐ <b>VIP</b>", reply_markup=admin_vip_kb(), parse_mode="HTML")
 
+@dp.callback_query(F.data == "adm_luck_menu")
+async def cb_adm_luck_menu(c: CallbackQuery):
+    if not await check_admin_perm(c, "luck"): return
+    await c.message.edit_text("🍀 <b>Удача</b>", reply_markup=admin_luck_kb(), parse_mode="HTML")
+
 @dp.callback_query(F.data == "adm_stats")
 async def cb_adm_stats(c: CallbackQuery):
     if not await check_admin_perm(c, "stats"): return
@@ -1174,17 +1259,56 @@ async def cb_adm_view_profile_do(m: Message, state: FSMContext):
         elif u["ban_until"] > time.time():
             ban_status = f"🚫 До {datetime.fromtimestamp(u['ban_until']).strftime('%d.%m.%Y')}"
     vip = f"⭐ {u.get('vip_level')}" if u.get("is_vip") else "—"
+    luck = u.get("luck", 50)
     lines = [f"👤 <b>Профиль #{u['game_id']}</b>", "",
              f"🎭 {u['nick'] or '—'}", f"🆔 <code>{u['user_id']}</code>",
              f"🚫 Бан: {ban_status}",
              f"👑 Админ: {'✅ ' + (u.get('admin_perms') or '') if u.get('is_admin') else '❌'}",
-             f"⭐ VIP: {vip}", "",
+             f"⭐ VIP: {vip}", f"🍀 Удача: <b>{luck}%</b>", "",
              f"💰 {fmt_full(u['balance'])}$", f"🏦 {fmt_full(u['bank_wallet'])}$",
              f"₿ {fmt_btc(u['btc'])}", f"👛 {fmt_btc(u.get('btc_wallet',0))}",
              f"💼 {list(biz.keys())[0] if biz else '—'}",
              f"⛏ {ftype} ({fcount})", f"🏠 {houses[0] if houses else '—'}",
              f"🚗 {cars[0] if cars else '—'}", f"🎮 {u['wins']}W/{u['losses']}L"]
     await m.answer("\n".join(lines), reply_markup=back_kb("admin_panel"), parse_mode="HTML")
+    await state.clear()
+
+# --- Удача ---
+@dp.callback_query(F.data == "adm_luck_set")
+async def cb_adm_luck_set(c: CallbackQuery, state: FSMContext):
+    if not await check_admin_perm(c, "luck"): return
+    await state.set_state(St.adm_luck_target)
+    await c.message.edit_text("🍀 <code>ID шанс</code>\nПример: <code>1001 80</code>\n0 — всегда проигрыш, 50 — обычный, 100 — всегда победа")
+
+@dp.message(St.adm_luck_target)
+async def cb_adm_luck_target_do(m: Message, state: FSMContext):
+    parts = m.text.split()
+    if len(parts) != 2: await m.answer("❌ ID шанс"); return
+    try:
+        gid = int(parts[0]); luck = int(parts[1])
+    except: await m.answer("❌ Числа"); return
+    if luck < 0 or luck > 100: await m.answer("❌ Шанс 0-100"); return
+    u = await db.get_user_by_game_id(gid)
+    if not u: await m.answer("❌ Не найден"); await state.clear(); return
+    await db.set_luck(u["user_id"], luck)
+    await m.answer(f"✅ Удача #{gid}: <b>{luck}%</b>", reply_markup=back_kb("adm_luck_menu"), parse_mode="HTML")
+    await state.clear()
+
+@dp.callback_query(F.data == "adm_luck_view")
+async def cb_adm_luck_view(c: CallbackQuery, state: FSMContext):
+    if not await check_admin_perm(c, "luck"): return
+    await state.set_state(St.adm_luck_view)
+    await c.message.edit_text("📊 Введи игровой ID:")
+
+@dp.message(St.adm_luck_view)
+async def cb_adm_luck_view_do(m: Message, state: FSMContext):
+    try: gid = int(m.text.strip())
+    except: await m.answer("❌ Число"); return
+    u = await db.get_user_by_game_id(gid)
+    if not u: await m.answer("❌ Не найден"); await state.clear(); return
+    await m.answer(
+        f"🍀 <b>Удача игрока #{gid}</b>\n\n🎭 {u['nick']}\n🍀 Шанс: <b>{u.get('luck',50)}%</b>",
+        reply_markup=back_kb("adm_luck_menu"), parse_mode="HTML")
     await state.clear()
 
 # --- Деньги ---
@@ -1535,11 +1659,30 @@ async def cb_admperm_take(c: CallbackQuery, state: FSMContext):
 async def cb_adm_vip_give(c: CallbackQuery, state: FSMContext):
     if not is_main_admin(c.from_user.id): return
     await state.set_state(St.adm_give_vip)
+    await state.update_data(vip_action="give")
     await c.message.edit_text("⭐ <code>ID VIP_УРОВЕНЬ</code>\nПример: <code>1001 ADMIN</code>")
 
+@dp.callback_query(F.data == "adm_vip_take")
+async def cb_adm_vip_take(c: CallbackQuery, state: FSMContext):
+    if not is_main_admin(c.from_user.id): return
+    await state.set_state(St.adm_give_vip)
+    await state.update_data(vip_action="take")
+    await c.message.edit_text("❌ ID игрока для снятия VIP:")
+
 @dp.message(St.adm_give_vip)
-async def cb_adm_vip_give_do(m: Message, state: FSMContext):
+async def cb_adm_vip_do(m: Message, state: FSMContext):
     if not is_main_admin(m.from_user.id): return
+    data = await state.get_data()
+    action = data.get("vip_action", "give")
+    if action == "take":
+        try: gid = int(m.text.strip())
+        except: await m.answer("❌"); return
+        u = await db.get_user_by_game_id(gid)
+        if not u: await m.answer("❌"); await state.clear(); return
+        await db.update(u["user_id"], is_vip=0, vip_level="")
+        await m.answer(f"✅ VIP снят у #{gid}", reply_markup=back_kb("adm_give_vip"))
+        await state.clear()
+        return
     parts = m.text.split()
     if len(parts) != 2: await m.answer("❌ ID VIP"); return
     try: gid = int(parts[0])
@@ -1551,65 +1694,8 @@ async def cb_adm_vip_give_do(m: Message, state: FSMContext):
     await m.answer(f"✅ VIP {vip_level} выдан #{gid}", reply_markup=back_kb("adm_give_vip"))
     await state.clear()
 
-@dp.callback_query(F.data == "adm_vip_take")
-async def cb_adm_vip_take(c: CallbackQuery, state: FSMContext):
-    if not is_main_admin(c.from_user.id): return
-    await state.set_state(St.adm_give_vip)
-    await state.update_data(vip_action="take")
-    await c.message.edit_text("❌ ID игрока для снятия VIP:")
-
-@dp.message(St.adm_give_vip)
-async def cb_adm_vip_take_do(m: Message, state: FSMContext):
-    if not is_main_admin(m.from_user.id): return
-    data = await state.get_data()
-    if data.get("vip_action") == "take":
-        try: gid = int(m.text.strip())
-        except: await m.answer("❌"); return
-        u = await db.get_user_by_game_id(gid)
-        if not u: await m.answer("❌"); await state.clear(); return
-        await db.update(u["user_id"], is_vip=0, vip_level="")
-        await m.answer(f"✅ VIP снят у #{gid}", reply_markup=back_kb("adm_give_vip"))
-        await state.clear()
-
 # ============ ЗАПУСК ============
 register_group_handlers(dp)
-
-# Fallback для reply-кнопок "Банк" и "Награды" из профиля (если пользователь нажмёт)
-@dp.message(F.text == "🏦 Банк")
-async def reply_bank(m: Message):
-    ban = await check_banned(m.from_user.id)
-    if ban: await m.answer(ban); return
-    u = await db.get_user(m.from_user.id)
-    has_dep = u["deposit_amount"] > 0
-    ready = has_dep and u["deposit_end"] <= time.time()
-    lines = [f"🏦 <b>БАНК</b>", "", f"💰 Баланс: <b>{fmt_full(u['balance'])}$</b>",
-             f"🏦 Счёт: <b>{fmt_full(u['bank_wallet'])}$</b>"]
-    if has_dep:
-        lines.append(""); lines.append(f"📈 Вклад: <b>{fmt_full(u['deposit_amount'])}$</b>")
-    lines.append(""); lines.append("💸 Комиссия снятия: 3%")
-    await m.answer("\n".join(lines), reply_markup=bank_kb(has_dep, ready), parse_mode="HTML")
-
-@dp.message(F.text == "🎁 Награды")
-async def reply_rewards(m: Message):
-    ban = await check_banned(m.from_user.id)
-    if ban: await m.answer(ban); return
-    await m.answer("🎁 <b>Награды</b>", reply_markup=rewards_kb(), parse_mode="HTML")
-
-@dp.message(F.text == "🏆 Топ")
-async def reply_top(m: Message):
-    ban = await check_banned(m.from_user.id)
-    if ban: await m.answer(ban); return
-    top = await db.get_top(10)
-    rank = await db.get_user_rank(m.from_user.id)
-    digits = ["1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
-    lines = [f"💲 Топ игроков:", ""]
-    for i in range(10):
-        if i < len(top):
-            u = top[i]; lines.append(f"{digits[i]} {u.get('nick') or 'Игрок'} — {fmt_full(u['balance'])}$")
-        else:
-            lines.append(f"{digits[i]} —")
-    lines.append(""); lines.append(f"🌍 Твоя позиция: #{rank}")
-    await m.answer("\n".join(lines), reply_markup=back_kb("profile"), parse_mode="HTML")
 
 async def health(request): return web.Response(text="OK")
 
