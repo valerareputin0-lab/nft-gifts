@@ -20,9 +20,9 @@ def fmt_short(n):
     return f"{n} "
 
 def fmt_btc(n):
+    """BTC с 2 знаками (5.58)"""
     if n == 0: return "0"
-    if n < 0.01: return f"{n:.6f}"
-    return f"{n:.4f}"
+    return f"{n:.2f}"
 
 def parse_amount(s):
     if not s: return None
@@ -92,11 +92,13 @@ async def collect_business(user_id):
     return cash, 0
 
 async def process_farms(user_id):
+    """Начисляет BTC с ферм за прошедшее время (до 48ч)."""
     user = await db.get_user(user_id)
     now = int(time.time())
     last = user["last_passive"] or now
     elapsed = min(now - last, FARM_CAP_HOURS * 3600)
-    if elapsed < 60: return 0
+    if elapsed < 1:
+        return 0
     farms = parse_list(user["farms"])
     farm_btc = total_farm_income(farms) * elapsed / 3600
     if farm_btc > 0:
