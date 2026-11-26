@@ -12,7 +12,6 @@ def main_reply_kb(is_admin: bool = False):
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def group_reply_kb():
-    """Reply-кнопки для групп: Банк, Правила"""
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text="📊 Банк"), KeyboardButton(text="📖 Правила")]],
         resize_keyboard=True)
@@ -36,7 +35,6 @@ def back_kb(target="menu"):
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=target)]])
 
 def profile_kb(is_admin: bool = False):
-    """Профиль: без кнопки Назад (профиль = главный экран)."""
     rows = [
         [InlineKeyboardButton(text="🏦 Банк", callback_data="bank"),
          InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
@@ -82,8 +80,10 @@ def farms_kb(farm_type, count):
                 text=f"{f['name']} — {fmt_short(f['price'])}$ (+{f['btc_per_hour']}฿/ч)",
                 callback_data=f"buyfarm_{key}")])
     else:
-        rows.append([InlineKeyboardButton(text="💰 Снять биткоины", callback_data="farms_withdraw")])
-        rows.append([InlineKeyboardButton(text="₿ Продать биткоины", callback_data="farms_sellbtc")])
+        rows.append([
+            InlineKeyboardButton(text="💰 Снять биткоины", callback_data="farms_withdraw"),
+            InlineKeyboardButton(text="₿ Продать биткоины", callback_data="farms_sellbtc"),
+        ])
         rows.append([
             InlineKeyboardButton(text="➕ Купить фермы", callback_data="farm_buy_menu"),
             InlineKeyboardButton(text="➖ Продать фермы", callback_data="farm_sell_menu"),
@@ -332,7 +332,6 @@ def admin_vip_kb():
 
 # ============ ГРУППОВАЯ РУЛЕТКА ============
 def group_roulette_kb():
-    """Inline-кнопки под сообщением бота в группах."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Банк", callback_data="gr_bank"),
          InlineKeyboardButton(text="📖 Правила", callback_data="gr_rules")]])
