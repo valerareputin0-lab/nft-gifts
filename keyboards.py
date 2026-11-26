@@ -11,6 +11,12 @@ def main_reply_kb(is_admin: bool = False):
     ]
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
+def group_reply_kb():
+    """Reply-кнопки для групп: Банк, Правила"""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📊 Банк"), KeyboardButton(text="📖 Правила")]],
+        resize_keyboard=True)
+
 def main_kb(is_admin: bool = False):
     rows = [
         [InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
@@ -30,6 +36,7 @@ def back_kb(target="menu"):
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=target)]])
 
 def profile_kb(is_admin: bool = False):
+    """Профиль: без кнопки Назад (профиль = главный экран)."""
     rows = [
         [InlineKeyboardButton(text="🏦 Банк", callback_data="bank"),
          InlineKeyboardButton(text="🏆 Топ", callback_data="top")],
@@ -38,7 +45,6 @@ def profile_kb(is_admin: bool = False):
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(text="👑 Админка", callback_data="admin_panel")])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def biz_shop_kb():
@@ -326,7 +332,7 @@ def admin_vip_kb():
 
 # ============ ГРУППОВАЯ РУЛЕТКА ============
 def group_roulette_kb():
-    """Кнопки Банк/Правила для групповых чатов."""
+    """Inline-кнопки под сообщением бота в группах."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📊 Банк", callback_data="gr_bank"),
          InlineKeyboardButton(text="📖 Правила", callback_data="gr_rules")]])
