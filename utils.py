@@ -20,7 +20,6 @@ def fmt_short(n):
     return f"{n} "
 
 def fmt_btc(n):
-    """BTC с 2 знаками (5.58)"""
     if n == 0: return "0"
     return f"{n:.2f}"
 
@@ -66,6 +65,10 @@ def total_business_income(biz_dict):
 
 def total_farm_income(farms_list):
     return sum(FARMS[f]["btc_per_hour"] for f in farms_list if f in FARMS)
+
+def farm_income_per_minute(farms_list):
+    """Доход в минуту (BTC)."""
+    return total_farm_income(farms_list) / 60.0
 
 def calc_business_cash(u):
     biz = parse_businesses(u["businesses"])
