@@ -17,8 +17,9 @@ import database as db
 from utils import (fmt_full, fmt_short, fmt_btc, parse_amount, parse_list,
                    serialize_list, parse_businesses, serialize_businesses,
                    business_income, total_business_income, total_farm_income,
-                   process_farms, calc_business_cash, collect_business,
-                   new_deck, hand_value, dealer_play, fmt_hand, is_blackjack)
+                   farm_income_per_minute, process_farms, calc_business_cash,
+                   collect_business, new_deck, hand_value, dealer_play,
+                   fmt_hand, is_blackjack)
 from keyboards import (main_kb, main_reply_kb, back_kb, profile_kb,
                        biz_shop_kb, biz_confirm_kb, biz_manage_kb, farms_kb,
                        houses_kb, garage_kb, wardrobe_kb, shop_kb, rewards_kb,
@@ -90,7 +91,6 @@ async def check_banned(uid):
     await db.update(uid, is_banned=0, ban_until=0)
     return None
 
-# ============ УДАЧА (LUCK) ============
 def apply_luck(win: bool, luck: int) -> bool:
     if luck >= 100: return True
     if luck <= 0: return False
@@ -119,8 +119,6 @@ async def process_nick(m: Message, state: FSMContext):
         await m.answer("❌ Ник занят"); return
     await db.set_nick(m.from_user.id, nick)
     data = await state.get_data(); await state.clear()
-    u = await db.get_user(m.from_user.id)
-    adm = is_admin_any(u)
     if data.get("nick_from") == "change":
         await m.answer(f"✅ Ник: <b>{nick}</b>", parse_mode="HTML")
         await show_profile(m.from_user.id, m, is_cb=False)
@@ -137,8 +135,6 @@ async def cmd_start(m: Message, state: FSMContext):
     if ban: await m.answer(ban); return
     if not u.get("nick"):
         await ask_nick(m, state, "start"); return
-    adm = is_admin_any(u)
-    # Отправляем ОДНО сообщение: профиль + reply-кнопки
     await show_profile(m.from_user.id, m, is_cb=False, with_reply_kb=True)
 
 # ============ REPLY-КНОПКИ ============
@@ -150,6 +146,7 @@ async def reply_profile(m: Message):
 async def reply_casino(m: Message):
     ban = await check_banned(m.from_user.id)
     if ban: await m.answer(ban); return
+    await process_farms(m.from_user.id)
     await m.answer(
         "🎰 <b>Казино</b>\n\n"
         "🎯 Рулетка — угадай цвет/число (x2–x30)\n"
@@ -285,7 +282,6 @@ async def show_profile(uid, m_or_c, is_cb=False, with_reply_kb=False):
     else:
         await m_or_c.answer(text, reply_markup=kb, parse_mode="HTML")
         if with_reply_kb:
-            # Отправляем только reply-кнопки, БЕЗ текста (точка-разделитель)
             await m_or_c.answer("👇", reply_markup=main_reply_kb(adm))
 
 @dp.callback_query(F.data == "profile")
@@ -330,6 +326,7 @@ async def show_biz(uid, m_or_c, is_cb=False):
         else: await m_or_c.answer(ban)
         return
     await db.touch_active(uid)
+    await process_farms(uid)
     u = await db.get_user(uid)
     biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
     if biz:
@@ -439,12 +436,14 @@ async def show_farms(uid, m_or_c, is_cb=False):
     u = await db.get_user(uid)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
     if ftype:
-        f = FARMS[ftype]; total = total_farm_income(lst)
+        f = FARMS[ftype]
+        total_hour = total_farm_income(lst)
+        total_min = farm_income_per_minute(lst)
         text = (f"⛏️ Ферма {f['name'].split(' ',1)[-1]} ({fcount}шт)\n\n"
-                f"💰 Заработок в час: {total:.0f}฿\n"
-                f"⛏️ Количество ферм: {fcount}\n"
-                f"₿ Курс Bitcoin: {fmt_short(BTC_CURRENT)}$\n"
-                f"💵 На фермах: {fmt_btc(u['btc'])}₿ (≈{fmt_full(int(u['btc']*BTC_CURRENT))}$)\n"
+                f"💰 Заработок в минуту: <b>{total_min:.2f}฿</b>\n"
+                f"📈 В час: {total_hour:.0f}฿\n"
+                f"₿ Курс Bitcoin: {fmt_short(BTC_CURRENT)}$\n\n"
+                f"💵 На фермах: <b>{fmt_btc(u['btc'])}₿</b> (≈{fmt_full(int(u['btc']*BTC_CURRENT))}$)\n"
                 f"👛 В кошельке: {fmt_btc(u.get('btc_wallet',0))}₿")
     else:
         lines = [f"🌐 {u['nick']}, список ферм:", ""]
@@ -547,8 +546,8 @@ async def cb_farms_withdraw(c: CallbackQuery):
     if ban: await c.answer(ban, show_alert=True); return
     await process_farms(c.from_user.id)
     u = await db.get_user(c.from_user.id)
-    if u["btc"] < 0.0001:
-        await c.answer("Нечего снимать", show_alert=True); return
+    if u["btc"] < 0.01:
+        await c.answer("Нечего снимать (минимум 0.01₿)", show_alert=True); return
     amount = u["btc"]
     await db.update(c.from_user.id, btc=0, btc_wallet=(u.get("btc_wallet",0) + amount))
     await c.answer(f"✅ Снято {fmt_btc(amount)}₿ в кошелёк", show_alert=True)
@@ -559,7 +558,7 @@ async def cb_farms_sellbtc(c: CallbackQuery, state: FSMContext):
     ban = await check_banned(c.from_user.id)
     if ban: await c.answer(ban, show_alert=True); return
     u = await db.get_user(c.from_user.id)
-    if u.get("btc_wallet", 0) < 0.001:
+    if u.get("btc_wallet", 0) < 0.01:
         await c.answer("В кошельке мало BTC. Сними с ферм.", show_alert=True); return
     await state.set_state(St.sell_btc)
     await c.message.edit_text(
@@ -576,7 +575,7 @@ async def cb_sell_btc_amount(m: Message, state: FSMContext):
     money = int(amount * BTC_CURRENT)
     await db.update(m.from_user.id, btc_wallet=u["btc_wallet"] - amount)
     await db.add_balance(m.from_user.id, money); await state.clear()
-    await m.answer(f"✅ {amount:.4f}₿ → {fmt_full(money)}$")
+    await m.answer(f"✅ {amount:.2f}₿ → {fmt_full(money)}$")
     await show_farms(m.from_user.id, m, False)
 
 # ============ ДОМА ============
@@ -911,7 +910,9 @@ async def cb_bank_view(c: CallbackQuery):
 async def cb_casino(c: CallbackQuery, state: FSMContext):
     ban = await check_banned(c.from_user.id)
     if ban: await c.answer(ban, show_alert=True); return
-    await db.touch_active(c.from_user.id); await state.clear()
+    await db.touch_active(c.from_user.id)
+    await process_farms(c.from_user.id)
+    await state.clear()
     await c.message.edit_text(
         "🎰 <b>Казино</b>\n\n"
         "🎯 Рулетка — угадай цвет/число (x2–x30)\n"
