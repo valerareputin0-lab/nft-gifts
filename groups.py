@@ -7,7 +7,7 @@ from aiogram import Bot, F
 from aiogram.types import Message, CallbackQuery
 
 import database as db
-from keyboards import group_roulette_kb
+from keyboards import group_roulette_kb, group_reply_kb
 from config import MIN_BET
 
 ROULETTE_MULTS = [
@@ -127,8 +127,7 @@ async def handle_kaz(bot: Bot, m: Message):
             "Пример: <code>/kaz 5 100000</code>\n"
             "Сокращения: к (тыс), кк (млн), ккк (млрд), кккк (трлн), ккккк\n"
             "Множители: x2, x3, x5, x50",
-            parse_mode="HTML",
-            reply_markup=group_roulette_kb())
+            parse_mode="HTML")
         return
 
     try:
@@ -142,8 +141,8 @@ async def handle_kaz(bot: Bot, m: Message):
         await m.reply("❌ Неверная сумма")
         return
 
-    if mult not in [m for m, _ in ROULETTE_MULTS]:
-        await m.reply(f"❌ Множитель: {', '.join('x'+str(m) for m, _ in ROULETTE_MULTS)}")
+    if mult not in [mm for mm, _ in ROULETTE_MULTS]:
+        await m.reply(f"❌ Множитель: {', '.join('x'+str(mm) for mm, _ in ROULETTE_MULTS)}")
         return
 
     if amount < MIN_BET:
@@ -178,7 +177,7 @@ async def handle_kaz(bot: Bot, m: Message):
         f"\n⏳ До конца: {left} сек\n"
         f"📊 Баланс: {user['balance'] - amount:,}$".replace(",", ".")
     )
-    await m.reply(text, parse_mode="HTML", reply_markup=group_roulette_kb())
+    await m.reply(text, parse_mode="HTML")
 
 
 async def handle_bank(c: CallbackQuery):
@@ -247,6 +246,62 @@ async def handle_rules(c: CallbackQuery):
     await c.answer()
 
 
+async def handle_reply_bank(m: Message):
+    """Reply-кнопка '📊 Банк' в группе."""
+    chat_id = m.chat.id
+    rnd = await db.get_group_round(chat_id)
+    if not rnd or not rnd["active"]:
+        await m.reply("Нет активного раунда.")
+        return
+    left = max(0, rnd["end_time"] - int(time.time()))
+    bets = await db.get_group_bets(chat_id, rnd["end_time"])
+    if not bets:
+        await m.reply("Пока никто не поставил.")
+        return
+    lines = ["📊 <b>Банк раунда</b>", f"⏳ Осталось: <b>{left} сек</b>", ""]
+    by_mult = {}
+    for b in bets:
+        by_mult.setdefault(b["mult"], []).append(b)
+    total_pool = sum(b["amount"] for b in bets)
+    lines.append(f"💰 Всего: <b>{total_pool:,}$</b>".replace(",", "."))
+    lines.append("")
+    for mult in sorted(by_mult.keys()):
+        blist = by_mult[mult]
+        total_m = sum(b["amount"] for b in blist)
+        lines.append(f"<b>x{mult}</b> — {len(blist)} ставок, {total_m:,}$".replace(",", "."))
+        for b in blist[:5]:
+            lines.append(f"  • {b['nick']}: {b['amount']:,}$".replace(",", "."))
+        if len(blist) > 5:
+            lines.append(f"  ... и ещё {len(blist) - 5}")
+        lines.append("")
+    await m.reply("\n".join(lines), parse_mode="HTML")
+
+
+async def handle_reply_rules(m: Message):
+    """Reply-кнопка '📖 Правила' в группе."""
+    lines = [
+        "📖 <b>Правила рулетки</b>",
+        "",
+        "🎯 Ставка: <code>/kaz множитель сумма</code>",
+        "Пример: <code>/kaz 5 100000</code>",
+        "Сокращения: <code>к</code> (тыс), <code>кк</code> (млн), <code>ккк</code> (млрд), <code>кккк</code>, <code>ккккк</code>",
+        "",
+        "⏳ Раунд — <b>60 секунд</b> с первой ставки.",
+        "Один раунд на чат.",
+        "",
+        "🎲 <b>Множители и шансы:</b>",
+    ]
+    for mult, chance in ROULETTE_MULTS:
+        lines.append(f"  • x{mult} — {chance}%")
+    lines.append("")
+    lines.append("💰 Минимум: 1.000$")
+    lines.append("♾ Максимум: по балансу")
+    lines.append("")
+    lines.append("✅ Выигрыш = ставка × множитель (включая тело)")
+    lines.append("Можно делать несколько ставок на разные множители!")
+    await m.reply("\n".join(lines), parse_mode="HTML")
+
+
 def register_group_handlers(dp):
     @dp.message(F.text.startswith("/kaz"))
     async def kaz_handler(m: Message):
@@ -268,3 +323,13 @@ def register_group_handlers(dp):
             await c.answer("Только в группах")
             return
         await handle_rules(c)
+
+    @dp.message(F.text == "📊 Банк")
+    async def reply_bank_handler(m: Message):
+        if not is_group(m.chat.type): return
+        await handle_reply_bank(m)
+
+    @dp.message(F.text == "📖 Правила")
+    async def reply_rules_handler(m: Message):
+        if not is_group(m.chat.type): return
+        await handle_reply_rules(m)
