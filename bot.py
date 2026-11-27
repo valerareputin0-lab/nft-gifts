@@ -3,10 +3,11 @@ import time
 import random
 import os
 from datetime import datetime
+from typing import Callable, Dict, Any, Awaitable
 
 from aiohttp import web
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram import Bot, Dispatcher, F, BaseMiddleware
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, TelegramObject
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -43,6 +44,20 @@ dp = Dispatcher(storage=MemoryStorage())
 
 BTC_CURRENT = BTC_PRICE
 MAX_AMOUNT = 999_999_999_999_999_999
+
+# ============ MIDDLEWARE для автофарма ферм ============
+class FarmsMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data):
+        try:
+            user = data.get("event_from_user")
+            if user:
+                await process_farms(user.id)
+        except Exception:
+            pass
+        return await handler(event, data)
+
+dp.message.middleware(FarmsMiddleware())
+dp.callback_query.middleware(FarmsMiddleware())
 
 class St(StatesGroup):
     bj_bet = State(); bj_play = State()
@@ -146,7 +161,6 @@ async def reply_profile(m: Message):
 async def reply_casino(m: Message):
     ban = await check_banned(m.from_user.id)
     if ban: await m.answer(ban); return
-    await process_farms(m.from_user.id)
     await m.answer(
         "🎰 <b>Казино</b>\n\n"
         "🎯 Рулетка — угадай цвет/число (x2–x30)\n"
@@ -220,7 +234,6 @@ async def show_profile(uid, m_or_c, is_cb=False, with_reply_kb=False):
         else: await m_or_c.answer(ban)
         return
     await db.touch_active(uid)
-    await process_farms(uid)
     u = await db.get_user(uid)
     rank = await db.get_user_rank(uid)
     biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
@@ -326,7 +339,6 @@ async def show_biz(uid, m_or_c, is_cb=False):
         else: await m_or_c.answer(ban)
         return
     await db.touch_active(uid)
-    await process_farms(uid)
     u = await db.get_user(uid)
     biz = parse_businesses(u["businesses"]); biz = {k:v for k,v in biz.items() if k in BUSINESSES}
     if biz:
@@ -432,7 +444,6 @@ async def show_farms(uid, m_or_c, is_cb=False):
         else: await m_or_c.answer(ban)
         return
     await db.touch_active(uid)
-    await process_farms(uid)
     u = await db.get_user(uid)
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
     if ftype:
@@ -529,7 +540,7 @@ async def cb_sell_farm_qty(m: Message, state: FSMContext):
     lst = parse_list(u["farms"]); ftype = lst[0] if lst else None; fcount = len(lst)
     if not ftype or fcount == 0: await m.answer("❌ Нет"); await state.clear(); return
     if qty > fcount: await m.answer(f"❌ Только {fcount}"); await state.clear(); return
-    await process_farms(m.from_user.id); u = await db.get_user(m.from_user.id)
+    u = await db.get_user(m.from_user.id)
     f = FARMS[ftype]; total = int(f["price"] * (1 - SELL_PERCENT)) * qty
     await db.add_balance(m.from_user.id, total)
     lst = parse_list(u["farms"])
@@ -544,7 +555,6 @@ async def cb_sell_farm_qty(m: Message, state: FSMContext):
 async def cb_farms_withdraw(c: CallbackQuery):
     ban = await check_banned(c.from_user.id)
     if ban: await c.answer(ban, show_alert=True); return
-    await process_farms(c.from_user.id)
     u = await db.get_user(c.from_user.id)
     if u["btc"] < 0.01:
         await c.answer("Нечего снимать (минимум 0.01₿)", show_alert=True); return
@@ -910,9 +920,7 @@ async def cb_bank_view(c: CallbackQuery):
 async def cb_casino(c: CallbackQuery, state: FSMContext):
     ban = await check_banned(c.from_user.id)
     if ban: await c.answer(ban, show_alert=True); return
-    await db.touch_active(c.from_user.id)
-    await process_farms(c.from_user.id)
-    await state.clear()
+    await db.touch_active(c.from_user.id); await state.clear()
     await c.message.edit_text(
         "🎰 <b>Казино</b>\n\n"
         "🎯 Рулетка — угадай цвет/число (x2–x30)\n"
