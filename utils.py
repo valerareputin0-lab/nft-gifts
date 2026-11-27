@@ -67,7 +67,6 @@ def total_farm_income(farms_list):
     return sum(FARMS[f]["btc_per_hour"] for f in farms_list if f in FARMS)
 
 def farm_income_per_minute(farms_list):
-    """Доход в минуту (BTC)."""
     return total_farm_income(farms_list) / 60.0
 
 def calc_business_cash(u):
@@ -100,9 +99,12 @@ async def process_farms(user_id):
     now = int(time.time())
     last = user["last_passive"] or now
     elapsed = min(now - last, FARM_CAP_HOURS * 3600)
+    farms = parse_list(user["farms"])
+    if not farms:
+        await db.update(user_id, last_passive=now)
+        return 0
     if elapsed < 1:
         return 0
-    farms = parse_list(user["farms"])
     farm_btc = total_farm_income(farms) * elapsed / 3600
     if farm_btc > 0:
         await db.update(user_id, btc=user["btc"] + farm_btc)
